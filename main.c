@@ -1,0 +1,661 @@
+/*
+ * Copyright (C) 2017 FIX94
+ *
+ * This software may be modified and distributed under the terms
+ * of the MIT license.  See the LICENSE file for details.
+ */
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <stdbool.h>
+#include <malloc.h>
+#include <inttypes.h>
+#include <GL/glut.h>
+#include <GL/glext.h>
+#include <time.h>
+#include <math.h>
+//#include "mapper.h"
+#include "cpu.h"
+#include "input.h"
+#include "ppu.h"
+#include "mem.h"
+//#include "fm2play.h"
+#include "apu.h"
+#include "audio.h"
+/*#include "audio_fds.h"
+#include "audio_vrc7.h"*/
+
+#define DEBUG_HZ 0
+#define DEBUG_MAIN_CALLS 0
+#define DEBUG_KEY 0
+#define DEBUG_LOAD_INFO 1
+
+static const char *VERSION_STRING = "fixGB";
+
+static void gbEmuDisplayFrame(void);
+static void gbEmuMainLoop(void);
+static void gbEmuDeinit(void);
+
+static void gbEmuHandleKeyDown(unsigned char key, int x, int y);
+static void gbEmuHandleKeyUp(unsigned char key, int x, int y);
+static void gbEmuHandleSpecialDown(int key, int x, int y);
+static void gbEmuHandleSpecialUp(int key, int x, int y);
+
+/*static */uint8_t *emuGBROM = NULL;
+static char *emuSaveName = NULL;
+static uint8_t *emuPrgRAM = NULL;
+static uint32_t emuPrgRAMsize = 0;
+//used externally
+uint8_t *textureImage = NULL;
+bool nesPause = false;
+bool ppuDebugPauseFrame = false;
+bool doOverscan = true;
+bool gbEmuGBSPlayback = false;
+
+static bool inPause = false;
+static bool inOverscanToggle = false;
+static bool inResize = false;
+
+#if WINDOWS_BUILD
+#include <windows.h>
+typedef bool (APIENTRY *PFNWGLSWAPINTERVALEXTPROC) (int interval);
+PFNWGLSWAPINTERVALEXTPROC wglSwapIntervalEXT = NULL;
+#if DEBUG_HZ
+static DWORD emuFrameStart = 0;
+static DWORD emuTimesCalled = 0;
+static DWORD emuTotalElapsed = 0;
+#endif
+#if DEBUG_MAIN_CALLS
+static DWORD emuMainFrameStart = 0;
+static DWORD emuMainTimesCalled = 0;
+static DWORD emuMainTimesSkipped = 0;
+static DWORD emuMainTotalElapsed = 0;
+#endif
+#endif
+
+#define VISIBLE_DOTS 160
+#define VISIBLE_LINES 144
+
+static const uint32_t visibleImg = VISIBLE_DOTS*VISIBLE_LINES*4;
+static uint8_t scaleFactor = 2;
+static bool emuSaveEnabled = false;
+static uint32_t mainLoopRuns;
+static uint16_t mainLoopPos;
+//from input.c
+extern uint8_t inValReads[8];
+
+int main(int argc, char** argv)
+{
+	puts(VERSION_STRING);
+	if(argc >= 2 && (strstr(argv[1],".gb") != NULL || strstr(argv[1],".GB") != NULL))
+	{
+		FILE *gbF = fopen(argv[1],"rb");
+		if(!gbF) return EXIT_SUCCESS;
+		fseek(gbF,0,SEEK_END);
+		size_t fsize = ftell(gbF);
+		rewind(gbF);
+		emuGBROM = malloc(fsize);
+		fread(emuGBROM,1,fsize,gbF);
+		fclose(gbF);
+		//uint8_t mapper = ((emuGBROM[6] & 0xF0) >> 4) | ((emuGBROM[7] & 0xF0));
+		emuSaveEnabled = (emuGBROM[6] & (1<<1)) != 0;
+		bool trainer = (emuGBROM[6] & (1<<2)) != 0;
+		uint32_t prgROMsize = emuGBROM[4] * 0x4000;
+		uint32_t chrROMsize = emuGBROM[5] * 0x2000;
+		emuPrgRAMsize = emuGBROM[8] * 0x2000;
+		if(emuPrgRAMsize == 0) emuPrgRAMsize = 0x2000;
+		emuPrgRAM = malloc(emuPrgRAMsize);
+		uint8_t *prgROM = emuGBROM+16;
+		if(trainer)
+		{
+			memcpy(emuPrgRAM+0x1000,prgROM,0x200);
+			prgROM += 512;
+		}
+		uint8_t *chrROM = NULL;
+		if(chrROMsize)
+		{
+			chrROM = emuGBROM+16+prgROMsize;
+			if(trainer) chrROM += 512;
+		}
+		apuInitBufs();
+		cpuInit();
+		ppuInit();
+		memInit();
+		apuInit();
+		inputInit();
+		#if DEBUG_LOAD_INFO
+		printf("Read in %s\n", argv[1]);
+		//printf("Used Mapper: %i\n", mapper);
+		//printf("PRG: 0x%x bytes PRG RAM: 0x%x bytes CHR: 0x%x bytes\n", prgROMsize, emuPrgRAMsize, chrROMsize);
+		#endif
+		/*if(!mapperInit(mapper, prgROM, prgROMsize, emuPrgRAM, emuPrgRAMsize, chrROM, chrROMsize))
+		{
+			printf("Mapper init failed!\n");
+			free(emuGBROM);
+			emuGBROM = NULL;
+			return EXIT_SUCCESS;
+		}
+		if(emuGBROM[6] & 8)
+			ppuSetNameTbl4Screen();
+		else if(emuGBROM[6] & 1)
+			ppuSetNameTblVertical();
+		else
+			ppuSetNameTblHorizontal();
+		#if DEBUG_LOAD_INFO
+		printf("Trainer: %i Saving: %i VRAM Mode: %s\n", trainer, emuSaveEnabled, (emuGBROM[6] & 1) ? "Vertical" : 
+			((!(emuGBROM[6] & 1)) ? "Horizontal" : "4-Screen"));
+		#endif
+		if(emuSaveEnabled)
+		{
+			emuSaveName = strdup(argv[1]);
+			memcpy(emuSaveName+strlen(emuSaveName)-3,"sav",3);
+			FILE *save = fopen(emuSaveName, "rb");
+			if(save)
+			{
+				fread(emuPrgRAM,1,emuPrgRAMsize,save);
+				fclose(save);
+			}
+		}*/
+	}
+	/*else if(argc >= 2 && (strstr(argv[1],".gbs") != NULL || strstr(argv[1],".GBS") != NULL))
+	{
+		FILE *gbF = fopen(argv[1],"rb");
+		if(!gbF) return EXIT_SUCCESS;
+		fseek(gbF,0,SEEK_END);
+		size_t fsize = ftell(gbF);
+		rewind(gbF);
+		emuGBROM = malloc(fsize);
+		fread(emuGBROM,1,fsize,gbF);
+		fclose(gbF);
+		emuPrgRAMsize = 0x2000;
+		emuPrgRAM = malloc(emuPrgRAMsize);
+		if(!mapperInitGBS(emuGBROM, fsize, emuPrgRAM, emuPrgRAMsize))
+		{
+			printf("GBS init failed!\n");
+			free(emuGBROM);
+			return EXIT_SUCCESS;
+		}
+		gbEmuGBSPlayback = true;
+	}*/
+	if(emuGBROM == NULL)
+		return EXIT_SUCCESS;
+	#if WINDOWS_BUILD
+	#if DEBUG_HZ
+	emuFrameStart = GetTickCount();
+	#endif
+	#if DEBUG_MAIN_CALLS
+	emuMainFrameStart = GetTickCount();
+	#endif
+	#endif
+	textureImage = malloc(visibleImg);
+	memset(textureImage,0,visibleImg);
+	//make sure image is visible
+	uint32_t i;
+	for(i = 0; i < visibleImg; i+=4)
+		textureImage[i+3] = 0xFF;
+	/*cpuCycleTimer = nesPAL ? 16 : 12;
+	//do one scanline per idle loop
+	ppuCycleTimer = nesPAL ? 5 : 4;
+	mainLoopRuns = nesPAL ? DOTS*ppuCycleTimer : DOTS*ppuCycleTimer;
+	mainLoopPos = mainLoopRuns;*/
+	//do one scanline per idle loop
+	mainLoopRuns = 70224;
+	mainLoopPos = mainLoopRuns;
+	glutInit(&argc, argv);
+	glutInitWindowSize(VISIBLE_DOTS*scaleFactor, VISIBLE_LINES*scaleFactor);
+	glutInitDisplayMode(GLUT_DOUBLE | GLUT_RGBA);
+	glutCreateWindow(VERSION_STRING);
+	audioInit();
+	atexit(&gbEmuDeinit);
+	glutKeyboardFunc(&gbEmuHandleKeyDown);
+	glutKeyboardUpFunc(&gbEmuHandleKeyUp);
+	glutSpecialFunc(&gbEmuHandleSpecialDown);
+	glutSpecialUpFunc(&gbEmuHandleSpecialUp);
+	glutDisplayFunc(&gbEmuDisplayFrame);
+	glutIdleFunc(&gbEmuMainLoop);
+	#if WINDOWS_BUILD
+	/* Enable OpenGL VSync */
+	wglSwapIntervalEXT = (PFNWGLSWAPINTERVALEXTPROC)wglGetProcAddress("wglSwapIntervalEXT");
+	wglSwapIntervalEXT(1);
+	#endif
+	glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+	glTexImage2D(GL_TEXTURE_2D, 0, 4, VISIBLE_DOTS, VISIBLE_LINES, 0, GL_BGRA, GL_UNSIGNED_INT_8_8_8_8_REV, textureImage);
+	glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP);
+	glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP);
+	glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+	glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+	glEnable(GL_TEXTURE_2D);
+	glShadeModel(GL_FLAT);
+
+	glutMainLoop();
+
+	return EXIT_SUCCESS;
+}
+
+static volatile bool emuRenderFrame = false;
+
+static void gbEmuDeinit(void)
+{
+	//printf("\n");
+	emuRenderFrame = false;
+	audioDeinit();
+	apuDeinitBufs();
+	if(emuGBROM != NULL)
+		free(emuGBROM);
+	emuGBROM = NULL;
+	if(emuPrgRAM != NULL)
+	{
+		if(emuSaveEnabled)
+		{
+			FILE *save = fopen(emuSaveName, "wb");
+			if(save)
+			{
+				fwrite(emuPrgRAM,1,emuPrgRAMsize,save);
+				fclose(save);
+			}
+		}
+		free(emuPrgRAM);
+	}
+	emuPrgRAM = NULL;
+	if(textureImage != NULL)
+		free(textureImage);
+	textureImage = NULL;
+	//printf("Bye!\n");
+}
+
+//used externally
+bool emuSkipVsync = false;
+bool emuSkipFrame = false;
+
+//static uint32_t mCycles = 0;
+//static bool emuApuDoCycle = false;
+
+static uint16_t mainClock = 1;
+static uint16_t memClock = 1;
+//static uint16_t vrc7Clock = 1;
+
+static void gbEmuMainLoop(void)
+{
+	do
+	{
+		if((!emuSkipVsync && emuRenderFrame) || nesPause)
+		{
+			#if (WINDOWS_BUILD && DEBUG_MAIN_CALLS)
+			emuMainTimesSkipped++;
+			#endif
+			audioSleep();
+			return;
+		}
+		if(mainClock == 4)
+		{
+			if(!apuCycle())
+			{
+				#if (WINDOWS_BUILD && DEBUG_MAIN_CALLS)
+				emuMainTimesSkipped++;
+				#endif
+				audioSleep();
+				return;
+			}
+			//main CPU clock
+			if(!cpuCycle())
+			{
+				memDumpMainMem();
+				exit(EXIT_SUCCESS);
+			}
+			if(memClock == 4)
+			{
+				memClockTimers();
+				memClock = 1;
+			}
+			else
+				memClock++;
+			//channel timer updates
+			apuLenCycle();
+			/*//mapper related irqs
+			if(mapperCycle != NULL)
+				mapperCycle();*/
+			//mCycles++;
+			mainClock = 1;
+		}
+		else
+			mainClock++;
+		apuClockTimers();
+		if(!ppuCycle())
+			exit(EXIT_SUCCESS);
+		if(!gbEmuGBSPlayback && ppuDrawDone())
+		{
+			//printf("%i\n",mCycles);
+			//mCycles = 0;
+			emuRenderFrame = true;
+			#if (WINDOWS_BUILD && DEBUG_HZ)
+			emuTimesCalled++;
+			DWORD end = GetTickCount();
+			emuTotalElapsed += end - emuFrameStart;
+			if(emuTotalElapsed >= 1000)
+			{
+				printf("\r%iHz   ", emuTimesCalled);
+				emuTimesCalled = 0;
+				emuTotalElapsed = 0;
+			}
+			emuFrameStart = end;
+			#endif
+			glutPostRedisplay();
+			if(ppuDebugPauseFrame)
+				nesPause = true;
+		}
+	}
+	while(mainLoopPos--);
+	mainLoopPos = mainLoopRuns;
+	#if (WINDOWS_BUILD && DEBUG_MAIN_CALLS)
+	emuMainTimesCalled++;
+	DWORD end = GetTickCount();
+	emuMainTotalElapsed += end - emuMainFrameStart;
+	if(emuMainTotalElapsed >= 1000)
+	{
+		printf("\r%i calls, %i skips   ", emuMainTimesCalled, emuMainTimesSkipped);
+		emuMainTimesCalled = 0;
+		emuMainTimesSkipped = 0;
+		emuMainTotalElapsed = 0;
+	}
+	emuMainFrameStart = end;
+	#endif
+}
+
+static void gbEmuHandleKeyDown(unsigned char key, int x, int y)
+{
+	(void)x;
+	(void)y;
+	switch (key)
+	{
+		case 'y':
+		case 'z':
+		case 'Y':
+		case 'Z':
+			#if DEBUG_KEY
+			if(inValReads[BUTTON_A]==0)
+				printf("a\n");
+			#endif
+			inValReads[BUTTON_A]=1;
+			break;
+		case 'x':
+		case 'X':
+			#if DEBUG_KEY
+			if(inValReads[BUTTON_B]==0)
+				printf("b\n");
+			#endif
+			inValReads[BUTTON_B]=1;
+			break;
+		case 's':
+		case 'S':
+			#if DEBUG_KEY
+			if(inValReads[BUTTON_SELECT]==0)
+				printf("sel\n");
+			#endif
+			inValReads[BUTTON_SELECT]=1;
+			break;
+		case 'a':
+		case 'A':
+			#if DEBUG_KEY
+			if(inValReads[BUTTON_START]==0)
+				printf("start\n");
+			#endif
+			inValReads[BUTTON_START]=1;
+			break;
+		case '\x1B': //Escape
+			memDumpMainMem();
+			exit(EXIT_SUCCESS);
+			break;
+		case 'p':
+		case 'P':
+			if(!inPause)
+			{
+				#if DEBUG_KEY
+				printf("pause\n");
+				#endif
+				inPause = true;
+				nesPause ^= true;
+			}
+			break;
+		case '1':
+			if(!inResize)
+			{
+				inResize = true;
+				glutReshapeWindow(VISIBLE_DOTS*1, VISIBLE_LINES*1);
+			}
+			break;
+		case '2':
+			if(!inResize)
+			{
+				inResize = true;
+				glutReshapeWindow(VISIBLE_DOTS*2, VISIBLE_LINES*2);
+			}
+			break;
+		case '3':
+			if(!inResize)
+			{
+				inResize = true;
+				glutReshapeWindow(VISIBLE_DOTS*3, VISIBLE_LINES*3);
+			}
+			break;
+		case '4':
+			if(!inResize)
+			{
+				inResize = true;
+				glutReshapeWindow(VISIBLE_DOTS*4, VISIBLE_LINES*4);
+			}
+			break;
+		case '5':
+			if(!inResize)
+			{
+				inResize = true;
+				glutReshapeWindow(VISIBLE_DOTS*5, VISIBLE_LINES*5);
+			}
+			break;
+		case '6':
+			if(!inResize)
+			{
+				inResize = true;
+				glutReshapeWindow(VISIBLE_DOTS*6, VISIBLE_LINES*6);
+			}
+			break;
+		case '7':
+			if(!inResize)
+			{
+				inResize = true;
+				glutReshapeWindow(VISIBLE_DOTS*7, VISIBLE_LINES*7);
+			}
+			break;
+		case '8':
+			if(!inResize)
+			{
+				inResize = true;
+				glutReshapeWindow(VISIBLE_DOTS*8, VISIBLE_LINES*8);
+			}
+			break;
+		case '9':
+			if(!inResize)
+			{
+				inResize = true;
+				glutReshapeWindow(VISIBLE_DOTS*9, VISIBLE_LINES*9);
+			}
+			break;
+		case 'o':
+		case 'O':
+			if(!inOverscanToggle)
+			{
+				inOverscanToggle = true;
+				doOverscan ^= true;
+			}
+			break;
+		default:
+			break;
+	}
+}
+
+static void gbEmuHandleKeyUp(unsigned char key, int x, int y)
+{
+	(void)x;
+	(void)y;
+	switch (key)
+	{
+		case 'y':
+		case 'z':
+		case 'Y':
+		case 'Z':
+			#if DEBUG_KEY
+			printf("a up\n");
+			#endif
+			inValReads[BUTTON_A]=0;
+			break;
+		case 'x':
+		case 'X':
+			#if DEBUG_KEY
+			printf("b up\n");
+			#endif
+			inValReads[BUTTON_B]=0;
+			break;
+		case 's':
+		case 'S':
+			#if DEBUG_KEY
+			printf("sel up\n");
+			#endif
+			inValReads[BUTTON_SELECT]=0;
+			break;
+		case 'a':
+		case 'A':
+			#if DEBUG_KEY
+			printf("start up\n");
+			#endif
+			inValReads[BUTTON_START]=0;
+			break;
+		case 'p':
+		case 'P':
+			#if DEBUG_KEY
+			printf("pause up\n");
+			#endif
+			inPause=false;
+			break;
+		case '1': case '2':	case '3':
+		case '4': case '5':	case '6':
+		case '7': case '8':	case '9':
+			inResize = false;
+			break;
+		case 'o':
+		case 'O':
+			inOverscanToggle = false;
+			break;
+		default:
+			break;
+	}
+}
+
+static void gbEmuHandleSpecialDown(int key, int x, int y)
+{
+	(void)x;
+	(void)y;
+	switch(key)
+	{
+		case GLUT_KEY_UP:
+			#if DEBUG_KEY
+			if(inValReads[BUTTON_UP]==0)
+				printf("up\n");
+			#endif
+			inValReads[BUTTON_UP]=1;
+			break;	
+		case GLUT_KEY_DOWN:
+			#if DEBUG_KEY
+			if(inValReads[BUTTON_DOWN]==0)
+				printf("down\n");
+			#endif
+			inValReads[BUTTON_DOWN]=1;
+			break;
+		case GLUT_KEY_LEFT:
+			#if DEBUG_KEY
+			if(inValReads[BUTTON_LEFT]==0)
+				printf("left\n");
+			#endif
+			inValReads[BUTTON_LEFT]=1;
+			break;
+		case GLUT_KEY_RIGHT:
+			#if DEBUG_KEY
+			if(inValReads[BUTTON_RIGHT]==0)
+				printf("right\n");
+			#endif
+			inValReads[BUTTON_RIGHT]=1;
+			break;
+		default:
+			break;
+	}
+}
+
+static void gbEmuHandleSpecialUp(int key, int x, int y)
+{
+	(void)x;
+	(void)y;
+	switch(key)
+	{
+		case GLUT_KEY_UP:
+			#if DEBUG_KEY
+			printf("up up\n");
+			#endif
+			inValReads[BUTTON_UP]=0;
+			break;	
+		case GLUT_KEY_DOWN:
+			#if DEBUG_KEY
+			printf("down up\n");
+			#endif
+			inValReads[BUTTON_DOWN]=0;
+			break;
+		case GLUT_KEY_LEFT:
+			#if DEBUG_KEY
+			printf("left up\n");
+			#endif
+			inValReads[BUTTON_LEFT]=0;
+			break;
+		case GLUT_KEY_RIGHT:
+			#if DEBUG_KEY
+			printf("right up\n");
+			#endif
+			inValReads[BUTTON_RIGHT]=0;
+			break;
+		default:
+			break;
+	}
+}
+
+static void gbEmuDisplayFrame()
+{
+	if(emuRenderFrame)
+	{
+		if(emuSkipFrame)
+		{
+			emuRenderFrame = false;
+			return;
+		}
+		if(textureImage != NULL)
+			glTexImage2D(GL_TEXTURE_2D, 0, 4, VISIBLE_DOTS, VISIBLE_LINES, 0, GL_BGRA, GL_UNSIGNED_INT_8_8_8_8_REV, textureImage);
+		emuRenderFrame = false;
+	}
+
+	glClear(GL_COLOR_BUFFER_BIT);
+
+	glMatrixMode(GL_PROJECTION);
+	glLoadIdentity();
+	glOrtho(0, glutGet(GLUT_WINDOW_WIDTH), 0, glutGet(GLUT_WINDOW_HEIGHT), -1, 1);
+	glMatrixMode(GL_MODELVIEW);
+	glLoadIdentity();
+
+	double upscaleVal = round((((double)glutGet(GLUT_WINDOW_HEIGHT))/((double)VISIBLE_LINES))*20.0)/20.0;
+	double windowMiddle = ((double)glutGet(GLUT_WINDOW_WIDTH))/2.0;
+	double drawMiddle = (((double)VISIBLE_DOTS)*upscaleVal)/2.0;
+	double drawHeight = ((double)VISIBLE_LINES)*upscaleVal;
+
+	glBegin(GL_QUADS);
+		glTexCoord2f(0,0); glVertex2f(windowMiddle-drawMiddle,drawHeight);
+		glTexCoord2f(1,0); glVertex2f(windowMiddle+drawMiddle,drawHeight);
+		glTexCoord2f(1,1); glVertex2f(windowMiddle+drawMiddle,0);
+		glTexCoord2f(0,1); glVertex2f(windowMiddle-drawMiddle,0);
+	glEnd();
+
+	glutSwapBuffers();
+}
