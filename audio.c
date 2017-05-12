@@ -133,7 +133,7 @@ int audioInit()
 
     player = NewPlayer();
 
-	player->channels = AL_MONO_SOFT;
+	player->channels = AL_STEREO_SOFT;
 	player->rate = apuGetFrequency();
 	player->type = AL_FLOAT_SOFT;
 
