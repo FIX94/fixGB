@@ -1104,7 +1104,10 @@ bool cpuCycle()
 					cpu_action_arr = cpu_imm_l_arr;
 					break;
 				case 6:
-					cpu_action_arr = cpu_imm_hl_st_arr;
+					if((sub_instr&0xC0) == 0x40) //BIT only reads
+						cpu_action_arr = cpu_imm_hl_arr;
+					else //all other CB instructions do I/O
+						cpu_action_arr = cpu_imm_hl_st_arr;
 					break;
 				case 7:
 					cpu_action_arr = cpu_imm_a_arr;

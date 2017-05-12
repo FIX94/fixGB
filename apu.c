@@ -19,7 +19,7 @@
 #define WAV_ENABLE (1<<2)
 #define NOISE_ENABLE (1<<3)
 
-static uint8_t APU_IO_Reg[0x40];
+static uint8_t APU_IO_Reg[0x50];
 
 static float lpVal;
 static float hpVal;
@@ -33,40 +33,31 @@ static uint16_t freq2;
 static uint16_t wavFreq;
 static uint16_t noiseFreq;
 static uint16_t noiseShiftReg;
-static uint16_t dmcFreq;
-static uint16_t dmcAddr, dmcLen, dmcSampleBuf;
-static uint16_t dmcCurAddr, dmcCurLen;
 static uint8_t p1LengthCtr, p2LengthCtr, noiseLengthCtr;
-static uint8_t wavLinearCtr, wavCurLinearCtr;
+static uint8_t wavLinearCtr;
 static uint16_t wavLengthCtr;
-static uint8_t dmcVol, dmcCurVol;
-static uint8_t dmcSampleRemain;
 static uint8_t wavVolShift;
 static uint16_t modeCurCtr = 0;
 static uint16_t p1freqCtr, p2freqCtr, wavFreqCtr, noiseFreqCtr;
 static uint8_t p1Cycle, p2Cycle, wavCycle;
 static uint8_t modePos = 0;
 static bool p1haltloop, p2haltloop, wavhaltloop, noisehaltloop;
-static bool dmcstart;
-static bool dmcirqenable;
-static bool wavreload;
+static bool p1dacenable, p2dacenable, wavdacenable, noisedacenable;
+static bool p1enable, p2enable, wavenable, noiseenable;
+static bool soundEnabled;
 static bool noiseMode1;
-static bool apu_enable_irq;
 
 static envelope_t p1Env, p2Env, noiseEnv;
 
 typedef struct _sweep_t {
 	bool enabled;
-	bool start;
 	bool negative;
-	bool mute;
-	bool chan1;
 	uint8_t period;
 	uint8_t divider;
 	uint8_t shift;
 } sweep_t;
 
-static sweep_t p1Sweep, p2Sweep;
+static sweep_t p1Sweep;
 
 //used externally
 const uint8_t pulseSeqs[4][8] = {
@@ -85,7 +76,6 @@ const uint16_t *noisePeriod;
 
 static const uint8_t *p1seq = pulseSeqs[0], 
 					*p2seq = pulseSeqs[1];
-//extern bool dmc_interrupt;
 
 #define M_2_PI 6.28318530717958647692
 
@@ -117,18 +107,15 @@ void apuDeinitBufs()
 
 void apuInit()
 {
-	memset(APU_IO_Reg,0,0x40);
+	memset(APU_IO_Reg,0,0x50);
 	memset(apuOutBuf, 0, apuBufSizeBytes);
 	curBufPos = 0;
 
-	freq1 = 0; freq2 = 0; wavFreq = 0; noiseFreq = 0, dmcFreq = 0;
+	freq1 = 0; freq2 = 0; wavFreq = 0; noiseFreq = 0;
 	noiseShiftReg = 1;
 	p1LengthCtr = 0; p2LengthCtr = 0;
 	noiseLengthCtr = 0;	wavLengthCtr = 0;
-	wavLinearCtr = 0; wavCurLinearCtr = 0;
-	dmcAddr = 0, dmcLen = 0, dmcVol = 0; dmcSampleBuf = 0;
-	dmcCurAddr = 0, dmcCurLen = 0; dmcCurVol = 0;
-	dmcSampleRemain = 0;
+	wavLinearCtr = 0;
 	p1freqCtr = 0; p2freqCtr = 0; wavFreqCtr = 0, noiseFreqCtr = 0;
 	p1Cycle = 0; p2Cycle = 0; wavCycle = 0;
 	wavVolShift = 0;
@@ -138,18 +125,14 @@ void apuInit()
 	memset(&noiseEnv,0,sizeof(envelope_t));
 
 	memset(&p1Sweep,0,sizeof(sweep_t));
-	p1Sweep.chan1 = true; //for negative sweep
-	memset(&p2Sweep,0,sizeof(sweep_t));
-	p2Sweep.chan1 = false;
 
 	p1haltloop = false;	p2haltloop = false;
 	wavhaltloop = false; noisehaltloop = false;
-	dmcstart = false;
-	dmcirqenable = false;
-	wavreload = false;
+	p1enable = false; p2enable = false;
+	wavenable = false; noiseenable = false;
+	p1dacenable = false; p2dacenable = false;
+	wavdacenable = false; noisedacenable = false;
 	noiseMode1 = false;
-	//4017 starts out as 0, so enable
-	apu_enable_irq = true;
 }
 
 extern uint32_t cpu_oam_dma;
@@ -234,21 +217,21 @@ bool apuCycle()
 	uint8_t p1Out = lastP1Out[apuCurChan], p2Out = lastP2Out[apuCurChan], 
 		wavOut = lastwavOut[apuCurChan], noiseOut = lastNoiseOut[apuCurChan];
 	uint8_t apuEnableReg = (apuCurChan==0)?(APU_IO_Reg[0x25]>>4):(APU_IO_Reg[0x25]&0xF);
-	if(p1LengthCtr && (apuEnableReg & P1_ENABLE))
+	if(p1enable && p1dacenable && (apuEnableReg & P1_ENABLE))
 	{
-		if(p1seq[p1Cycle] && !p1Sweep.mute && freq1 > 0 && freq1 <= 0x7FF)
+		if(p1seq[p1Cycle] && freq1 > 0 && freq1 <= 0x7FF)
 			lastP1Out[apuCurChan] = p1Out = p1Env.vol;
 		else
 			p1Out = 0;
 	}
-	if(p2LengthCtr && (apuEnableReg & P2_ENABLE))
+	if(p2enable && p2dacenable && (apuEnableReg & P2_ENABLE))
 	{
 		if(p2seq[p2Cycle] && freq2 > 0 && freq2 <= 0x7FF)
 			lastP2Out[apuCurChan] = p2Out = p2Env.vol;
 		else
 			p2Out = 0;
 	}
-	if(wavLengthCtr && wavCurLinearCtr && (apuEnableReg & WAV_ENABLE))
+	if(wavenable && wavdacenable && (apuEnableReg & WAV_ENABLE))
 	{
 		uint8_t v = APU_IO_Reg[0x30+(wavCycle>>1)];
 		if((wavCycle&1)==0)
@@ -261,7 +244,7 @@ bool apuCycle()
 		else
 			wavOut = 0;
 	}
-	if(noiseLengthCtr && (apuEnableReg & NOISE_ENABLE))
+	if(noiseenable && noisedacenable && (apuEnableReg & NOISE_ENABLE))
 	{
 		if((noiseShiftReg&1) == 0 && noiseFreq > 0)
 			lastNoiseOut[apuCurChan] = noiseOut = noiseEnv.vol;
@@ -273,7 +256,7 @@ bool apuCycle()
 	float curLPout = lastLPOut[apuCurChan]+(lpVal*(curIn-lastLPOut[apuCurChan]));
 	float curHPOut = hpVal*(lastHPOut[apuCurChan]+curLPout-curIn);
 	//set output
-	apuOutBuf[curBufPos] = -curHPOut;
+	apuOutBuf[curBufPos] = soundEnabled?(-curHPOut):0;
 	lastLPOut[apuCurChan] = curLPout;
 	lastHPOut[apuCurChan] = curHPOut;
 	curBufPos++;
@@ -310,68 +293,84 @@ void doEnvelopeLogic(envelope_t *env)
 
 void sweepUpdateFreq(sweep_t *sw, uint16_t *freq)
 {
+	//printf("%i\n", *freq);
 	uint16_t inFreq = *freq;
-	if(sw->shift > 0)
+	uint16_t shiftVal = (inFreq >> sw->shift);
+	//if(sw->shift > 0)
 	{
 		if(sw->negative)
-		{
-			inFreq -= (inFreq >> sw->shift);
-			if(sw->chan1 == true) inFreq--;
-		}
+			inFreq -= shiftVal;
 		else
-			inFreq += (inFreq >> sw->shift);
+			inFreq += shiftVal;
 	}
-	if(inFreq > 0 && (inFreq <= 0x7FF))
+	if(inFreq <= 0x7FF)
 	{
-		sw->mute = false;
-		if(sw->enabled && sw->shift)
+		if(sw->enabled && sw->shift && sw->period)
 			*freq = inFreq;
 	}
 	else
-		sw->mute = true;
+	{
+		//printf("Freq disabled\n");
+		p1enable = false;
+	}
 }
 
 void doSweepLogic(sweep_t *sw, uint16_t *freq)
 {
-	if(sw->start)
+	if(sw->divider == 0)
 	{
-		uint8_t prevDiv = sw->divider;
-		sw->divider = sw->period;
-		sw->start = false;
-		if(prevDiv == 0)
-			sweepUpdateFreq(sw, freq);
-	}
-	else
-	{
-		if(sw->divider == 0)
+		if(sw->period)
 		{
 			sweepUpdateFreq(sw, freq);
-			sw->divider = sw->period;
+			//gameboy checks a SECOND time after updating...
+			uint16_t inFreq = *freq;
+			uint16_t shiftVal = (inFreq >> sw->shift);
+			if(sw->negative)
+				inFreq -= shiftVal;
+			else
+				inFreq += shiftVal;
+			if(inFreq > 0x7FF)
+			{
+				//printf("Freq disabled\n");
+				p1enable = false;
+			}
 		}
-		else
-			sw->divider--;
+		sw->divider = sw->period;
 	}
-	//gets clocked too little on its own?
-	/*if(inFreq < 8 || (inFreq >= 0x7FF))
-		sw->mute = true;
 	else
-		sw->mute = false;*/
+		sw->divider--;
 }
 
 void apuClockA()
 {
-	if(p1LengthCtr)
+	//printf("Len clock\n");
+	if(p1LengthCtr && !p1haltloop)
 	{
-		doSweepLogic(&p1Sweep, &freq1);
-		if(!p1haltloop)
-			p1LengthCtr--;
+		p1LengthCtr--;
+		if(p1LengthCtr == 0)
+		{
+			//printf("Len ran out\n");
+			p1enable = false;
+		}
 	}
 	if(p2LengthCtr && !p2haltloop)
+	{
 		p2LengthCtr--;
+		if(p2LengthCtr == 0)
+			p2enable = false;
+	}
 	if(wavLengthCtr && !wavhaltloop)
+	{
 		wavLengthCtr--;
+		if(wavLengthCtr == 0)
+			wavenable = false;
+	}
 	if(noiseLengthCtr && !noisehaltloop)
+	{
 		noiseLengthCtr--;
+		if(noiseLengthCtr == 0)
+			noiseenable = false;
+	}
 }
 
 void apuClockB()
@@ -392,71 +391,108 @@ void apuLenCycle()
 		modeCurCtr--;
 	if(modeCurCtr == 0)
 	{
-		apuClockA();
 		modePos++;
-		if(modePos >= 4)
+		if(modePos&1)
+			apuClockA();
+		if(modePos == 3 || modePos == 7)
+		{
+			//printf("sweep clock\n");
+			if(p1LengthCtr)
+				doSweepLogic(&p1Sweep, &freq1);
+		}
+		if(modePos >= 8)
 		{
 			apuClockB();
 			modePos = 0;
 		}
-		modeCurCtr = 4096;
+		modeCurCtr = 2048;
 	}
 }
 
 void apuSet8(uint8_t reg, uint8_t val)
 {
-	//printf("APU %02x %02x\n", reg, val);
+	//printf("APU set %02x %02x\n", reg, val);
+	if(reg == 0x26)
+	{
+		soundEnabled = (val&0x80)!=0;
+		if(!soundEnabled)
+		{
+			// FULL reset of nearly every reg
+			memset(APU_IO_Reg,0,0x30);
+			memset(APU_IO_Reg+0x40,0,0x10);
+			memset(&p1Env,0,sizeof(envelope_t));
+			memset(&p2Env,0,sizeof(envelope_t));
+			memset(&noiseEnv,0,sizeof(envelope_t));
+			memset(&p1Sweep,0,sizeof(sweep_t));
+			p1LengthCtr = 0; p2LengthCtr = 0;
+			wavLengthCtr = 0; noiseLengthCtr = 0;
+			p1enable = false; p2enable = false;
+			wavenable = false; noiseenable = false;
+			p1dacenable = false; p2dacenable = false;
+			wavdacenable = false; noisedacenable = false;
+			freq1 = 0; freq2 = 0; wavFreq = 0; noiseFreq = 0;
+		}
+	}
+	if(!soundEnabled)
+		return;
 	APU_IO_Reg[reg] = val;
 	if(reg == 0x10)
 	{
 		//printf("P1 sweep %02x\n", val);
-		p1Sweep.enabled = true;//((val&0x80) != 0);
 		p1Sweep.shift = val&7;
 		p1Sweep.period = (val>>4)&7;
-		//if(p1Sweep.period == 0)
-		//	p1Sweep.period = 8;
 		p1Sweep.negative = ((val&0x8) != 0);
-		p1Sweep.start = true;
-		if(freq1 > 0 && (freq1 <= 0x7FF))
-			p1Sweep.mute = false; //to be safe
-		doSweepLogic(&p1Sweep, &freq1);
+		//enabled by trigger
+		if(p1Sweep.enabled)
+		{
+			p1Sweep.divider = 0;
+			sweepUpdateFreq(&p1Sweep, &freq1);
+		}
 	}
 	else if(reg == 0x11)
 	{
 		p1seq = pulseSeqs[val>>6];
 		p1LengthCtr = 64-(val&0x3F);
-		if(freq1 > 0 && (freq1 <= 0x7FF))
-			p1Sweep.mute = false; //to be safe
 	}
 	else if(reg == 0x12)
 	{
 		p1Env.vol = (val>>4)&0xF;
 		p1Env.modeadd = (val&8)!=0;
+		p1dacenable = (p1Env.modeadd || p1Env.vol);
+		if(!p1dacenable)
+			p1enable = false;
 		p1Env.period = val&7;
 		//if(p1Env.period==0)
 		//	p1Env.period=8;
 		p1Env.divider = p1Env.period;
-		if(freq1 > 0 && (freq1 <= 0x7FF))
-			p1Sweep.mute = false; //to be safe
 	}
 	else if(reg == 0x13)
 	{
 		freq1 = ((freq1&~0xFF) | val);
-		if(freq1 > 0 && (freq1 <= 0x7FF))
-			p1Sweep.mute = false; //to be safe
 	}
 	else if(reg == 0x14)
 	{
 		p1haltloop = ((val&(1<<6)) == 0);
+		freq1 = (freq1&0xFF) | ((val&7)<<8);
 		if(val&(1<<7))
 		{
+			if(p1dacenable)
+				p1enable = true;
 			if(p1LengthCtr == 0)
 				p1LengthCtr = 64;
-			if(freq1 > 0 && (freq1 <= 0x7FF))
-				p1Sweep.mute = false; //to be safe
-			doSweepLogic(&p1Sweep, &freq1);
+			p1Cycle = 0;
+			//trigger used to enable/disable sweep
+			if(p1Sweep.period || p1Sweep.shift)
+			{
+			
+				p1Sweep.divider = 0;
+				p1Sweep.enabled = true;
+			}
+			else
+				p1Sweep.enabled = false;
+			if(p1Sweep.shift)
+				sweepUpdateFreq(&p1Sweep, &freq1);
 		}
-		freq1 = (freq1&0xFF) | ((val&7)<<8);
 		//printf("P1 new freq %04x\n", freq1);
 	}
 	else if(reg == 0x16)
@@ -468,6 +504,9 @@ void apuSet8(uint8_t reg, uint8_t val)
 	{
 		p2Env.vol = (val>>4)&0xF;
 		p2Env.modeadd = (val&8)!=0;
+		p2dacenable = (p2Env.modeadd || p2Env.vol);
+		if(!p2dacenable)
+			p2enable = false;
 		p2Env.period = val&7;
 		//if(p2Env.period==0)
 		//	p2Env.period=8;
@@ -480,16 +519,23 @@ void apuSet8(uint8_t reg, uint8_t val)
 	else if(reg == 0x19)
 	{
 		p2haltloop = ((val&(1<<6)) == 0);
+		freq2 = (freq2&0xFF) | ((val&7)<<8);
 		if(val&(1<<7))
 		{
+			if(p2dacenable)
+				p2enable = true;
 			if(p2LengthCtr == 0)
 				p2LengthCtr = 64;
+			p2Cycle = 0;
 		}
-		freq2 = (freq2&0xFF) | ((val&7)<<8);
 		//printf("P2 new freq %04x\n", freq2);
 	}
 	else if(reg == 0x1A)
-		wavCurLinearCtr = ((val&0x80)!=0);
+	{
+		wavdacenable = ((val&0x80)!=0);
+		if(!wavdacenable)
+			wavenable = false;
+	}
 	else if(reg == 0x1B)
 		wavLengthCtr = 256-val;
 	else if(reg == 0x1C)
@@ -519,12 +565,15 @@ void apuSet8(uint8_t reg, uint8_t val)
 	else if(reg == 0x1E)
 	{
 		wavhaltloop = ((val&(1<<6)) == 0);
+		wavFreq = (wavFreq&0xFF) | ((val&7)<<8);
 		if(val&(1<<7))
 		{
+			if(wavdacenable)
+				wavenable = true;
 			if(wavLengthCtr == 0)
 				wavLengthCtr = 256;
+			wavCycle = 0;
 		}
-		wavFreq = (wavFreq&0xFF) | ((val&7)<<8);
 		//printf("wav new freq %04x\n", wavFreq);
 	}
 	else if(reg == 0x20)
@@ -535,6 +584,9 @@ void apuSet8(uint8_t reg, uint8_t val)
 	{
 		noiseEnv.vol = (val>>4)&0xF;
 		noiseEnv.modeadd = (val&8)!=0;
+		noisedacenable = (noiseEnv.modeadd || noiseEnv.vol);
+		if(!noisedacenable)
+			noiseenable = false;
 		noiseEnv.period=val&7;
 		//if(noiseEnv.period==0)
 		//	noiseEnv.period=8;
@@ -553,28 +605,38 @@ void apuSet8(uint8_t reg, uint8_t val)
 		noisehaltloop = ((val&(1<<6)) == 0);
 		if(val&(1<<7))
 		{
+			if(noisedacenable)
+				noiseenable = true;
 			if(noiseLengthCtr == 0)
 				noiseLengthCtr = 64;
 		}
 	}
-	else if(reg == 0x25)
-	{
-		
-	}
 }
+
+//write-only bits are always set on reads by the cpu
+static const uint8_t apuReadMask[0x20] =
+{
+	0x80, 0x3F, 0x00, 0xFF, 0xBF, 0xFF, 0x3F, 0x00, 0xFF, 0xBF, 0x7F, 0xFF, 0x9F, 0xFF, 0xBF, 0xFF, 
+	0xFF, 0x00, 0x00, 0xBF, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+};
 
 uint8_t apuGet8(uint8_t reg)
 {
-	//printf("%08x\n", reg);
-	/*if(reg == 0x15)
+	if(reg == 0x26)
 	{
 		//uint8_t intrflags = ((apu_interrupt<<6) | (dmc_interrupt<<7));
-		//uint8_t apuretval = ((p1LengthCtr > 0) | ((p2LengthCtr > 0)<<1) | ((wavLengthCtr > 0)<<2) | ((noiseLengthCtr > 0)<<3) | ((dmcCurLen > 0)<<4) | intrflags);
-		//printf("Get 0x15 %02x\n",apuretval);
+		uint8_t apuretval = soundEnabled?((p1enable) | ((p2enable)<<1) | ((wavenable)<<2) | ((noiseenable)<<3)|0xF0):0x70;
+		//printf("Get 0x26 %02x\n",apuretval);
 		//apu_interrupt = false;
-		return 0;//apuretval;
-	}*/
-	return APU_IO_Reg[reg];
+		return apuretval;
+	}
+	uint8_t val;
+	if(reg >= 0x10 && reg < 0x30)
+		val = APU_IO_Reg[reg]|apuReadMask[reg-0x10];
+	else
+		val = APU_IO_Reg[reg];
+	//printf("APU get %02x %02x\n", reg, val);
+	return val;
 }
 
 uint8_t *apuGetBuf()

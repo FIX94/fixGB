@@ -113,7 +113,7 @@ void memSet8(uint16_t addr, uint8_t val)
 	else if(addr == 0xFF04)
 		divRegVal = 0; //writing any val resets to 0
 	else if(addr == 0xFF05)
-		timerRegVal = 0; //not sure
+		timerRegVal = val;
 	else if(addr == 0xFF06)
 		timerResetVal = val;
 	else if(addr == 0xFF07)
