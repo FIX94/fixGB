@@ -87,7 +87,8 @@ extern uint8_t inValReads[8];
 int main(int argc, char** argv)
 {
 	puts(VERSION_STRING);
-	if(argc >= 2 && (strstr(argv[1],".gb") != NULL || strstr(argv[1],".GB") != NULL))
+	if(argc >= 2 && (strstr(argv[1],".gb") != NULL || strstr(argv[1],".GB") != NULL
+				|| strstr(argv[1],".gbc") != NULL || strstr(argv[1],".GBC") != NULL))
 	{
 		FILE *gbF = fopen(argv[1],"rb");
 		if(!gbF) return EXIT_SUCCESS;

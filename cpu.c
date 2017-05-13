@@ -23,7 +23,7 @@ static uint16_t sp, pc, cpuTmp16;
 static uint8_t a,b,c,d,e,f,h,l,cpuTmp;
 static uint8_t sub_in_val;
 static bool irqEnable;
-static bool cpuHaltLoop,cpuStopLoop;
+static bool cpuHaltLoop,cpuStopLoop,cpuHaltBug;
 void cpuInit()
 {
 	sub_in_val=0,cpuTmp=0,cpuTmp16=0;
@@ -34,6 +34,7 @@ void cpuInit()
 	irqEnable = false;
 	cpuHaltLoop = false;
 	cpuStopLoop = false;
+	cpuHaltBug = false;
 	cpuSetupActionArr();
 }
 
@@ -439,7 +440,11 @@ static void cpuRES(uint8_t *reg)
 static void cpuHALT(uint8_t *none)
 {
 	(void)none;
-	cpuHaltLoop = true;
+	//HALT bug, PC wont increase next instruction!
+	if(!irqEnable && memGetCurIrqList())
+		cpuHaltBug = true;
+	else //enters HALT mode normall
+		cpuHaltLoop = true;
 }
 
 static void cpuBcInc()
@@ -1058,7 +1063,9 @@ void cpuGetInstruction()
 	
 	//if(pc>=0 && pc<0x30)
 	//	printf("%04x %02x hl %04x\n", pc, curInstr, (l|(h<<8)));
-	pc++;
+	//HALT bug: PC doesnt increase after instruction is parsed!
+	if(!cpuHaltBug) pc++;
+	cpuHaltBug = false;
 }
 
 /* Main CPU Interpreter */
@@ -1505,6 +1512,7 @@ bool cpuCycle()
 			memSet8(cpuTmp16, sp>>8);
 			break;
 		case CPU_DI_GET_INSTRUCTION:
+			//printf("Disabled IRQs at %04x\n", pc);
 			irqEnable = false;
 			cpuGetInstruction();
 			break;

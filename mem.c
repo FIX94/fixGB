@@ -13,6 +13,7 @@
 #include "apu.h"
 #include "input.h"
 
+static uint8_t Ext_Mem[0x2000];
 static uint8_t Main_Mem[0x2000];
 static uint8_t High_Mem[0x80];
 static uint8_t memLastVal;
@@ -29,12 +30,21 @@ static uint8_t timerRegTimer;
 static uint8_t cBank;
 static uint32_t bankMask;
 static bool timerRegEnable;
-
+static bool extMemUsed;
+uint16_t extMask;
 extern uint8_t *emuGBROM;
 
 void memInit()
 {
 	bankMask = (0x8000<<(emuGBROM[0x148]&0xF))-1;
+	extMemUsed = (emuGBROM[0x149] > 0);
+	if(extMemUsed)
+	{
+		if(emuGBROM[0x149] == 1)
+			extMask = 0x7FF;
+		else
+			extMask = 0x1FFF;
+	}
 	memset(Main_Mem,0,0x2000);
 	memset(High_Mem,0,0x80);
 	memLastVal = 0;
@@ -61,6 +71,8 @@ uint8_t memGet8(uint16_t addr)
 		val = emuGBROM[((cBank<<14)+(addr&0x3FFF))&bankMask];
 	else if(addr >= 0x8000 && addr < 0xA000)
 		val = ppuGet8(addr);
+	else if(addr >= 0xA000 && addr < 0xC000 && extMemUsed)
+		val = Ext_Mem[(addr&0x1FFF)&extMask];
 	else if(addr >= 0xC000 && addr < 0xFE00)
 		val = Main_Mem[addr&0x1FFF];
 	else if(addr >= 0xFE00 && addr < 0xFEA0)
@@ -77,7 +89,7 @@ uint8_t memGet8(uint16_t addr)
 		val = timerReg;
 	else if(addr == 0xFF0F)
 	{
-		val = irqFlagsReg;
+		val = irqFlagsReg|0xE0;
 		//printf("memGet8 %04x %02x\n", addr, val);
 	}
 	else if(addr >= 0xFF10 && addr < 0xFF40)
@@ -87,7 +99,7 @@ uint8_t memGet8(uint16_t addr)
 	else if(addr >= 0xFF80 && addr < 0xFFFF)
 		val = High_Mem[addr&0x7F];
 	else if(addr == 0xFFFF)
-		val = irqEnableReg;
+		val = irqEnableReg|0xE0;
 	memLastVal = val;
 	return val;
 }
@@ -104,6 +116,8 @@ void memSet8(uint16_t addr, uint8_t val)
 	}
 	if(addr >= 0x8000 && addr < 0xA000)
 		ppuSet8(addr, val);
+	else if(addr >= 0xA000 && addr < 0xC000 && extMemUsed)
+		Ext_Mem[(addr&0x1FFF)&extMask] = val;
 	else if(addr >= 0xC000 && addr < 0xFE00)
 		Main_Mem[addr&0x1FFF] = val;
 	else if(addr >= 0xFE00 && addr < 0xFEA0)
@@ -134,7 +148,7 @@ void memSet8(uint16_t addr, uint8_t val)
 	else if(addr == 0xFF0F)
 	{
 		//printf("memSet8 %04x %02x\n", addr, val);
-		irqFlagsReg = val;
+		irqFlagsReg = val&0x1F;
 	}
 	else if(addr >= 0xFF10 && addr < 0xFF40)
 		apuSet8(addr&0xFF, val);
@@ -145,7 +159,7 @@ void memSet8(uint16_t addr, uint8_t val)
 	else if(addr == 0xFFFF)
 	{
 		//printf("memSet8 %04x %02x\n", addr, val);
-		irqEnableReg = val;
+		irqEnableReg = val&0x1F;
 	}
 	memLastVal = val;
 }
