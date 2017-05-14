@@ -14,23 +14,19 @@
 #include <GL/glext.h>
 #include <time.h>
 #include <math.h>
-//#include "mapper.h"
 #include "cpu.h"
 #include "input.h"
 #include "ppu.h"
 #include "mem.h"
-//#include "fm2play.h"
 #include "apu.h"
 #include "audio.h"
-/*#include "audio_fds.h"
-#include "audio_vrc7.h"*/
 
 #define DEBUG_HZ 0
 #define DEBUG_MAIN_CALLS 0
 #define DEBUG_KEY 0
 #define DEBUG_LOAD_INFO 1
 
-static const char *VERSION_STRING = "fixGB";
+static const char *VERSION_STRING = "fixGB Alpha v0.1";
 
 static void gbEmuDisplayFrame(void);
 static void gbEmuMainLoop(void);
@@ -41,10 +37,8 @@ static void gbEmuHandleKeyUp(unsigned char key, int x, int y);
 static void gbEmuHandleSpecialDown(int key, int x, int y);
 static void gbEmuHandleSpecialUp(int key, int x, int y);
 
-/*static */uint8_t *emuGBROM = NULL;
-static char *emuSaveName = NULL;
-static uint8_t *emuPrgRAM = NULL;
-static uint32_t emuPrgRAMsize = 0;
+uint8_t *emuGBROM = NULL;
+char *emuSaveName = NULL;
 //used externally
 uint8_t *textureImage = NULL;
 bool nesPause = false;
@@ -77,8 +71,7 @@ static DWORD emuMainTotalElapsed = 0;
 #define VISIBLE_LINES 144
 
 static const uint32_t visibleImg = VISIBLE_DOTS*VISIBLE_LINES*4;
-static uint8_t scaleFactor = 2;
-static bool emuSaveEnabled = false;
+static uint8_t scaleFactor = 3;
 static uint32_t mainLoopRuns;
 static uint16_t mainLoopPos;
 //from input.c
@@ -96,32 +89,34 @@ int main(int argc, char** argv)
 		size_t fsize = ftell(gbF);
 		rewind(gbF);
 		emuGBROM = malloc(fsize);
+		if(emuGBROM == NULL)
+		{
+			printf("Unable to allocate ROM space...\n");
+			exit(EXIT_SUCCESS);
+		}
 		fread(emuGBROM,1,fsize,gbF);
 		fclose(gbF);
-		//uint8_t mapper = ((emuGBROM[6] & 0xF0) >> 4) | ((emuGBROM[7] & 0xF0));
-		emuSaveEnabled = (emuGBROM[6] & (1<<1)) != 0;
-		bool trainer = (emuGBROM[6] & (1<<2)) != 0;
-		uint32_t prgROMsize = emuGBROM[4] * 0x4000;
-		uint32_t chrROMsize = emuGBROM[5] * 0x2000;
-		emuPrgRAMsize = emuGBROM[8] * 0x2000;
-		if(emuPrgRAMsize == 0) emuPrgRAMsize = 0x2000;
-		emuPrgRAM = malloc(emuPrgRAMsize);
-		uint8_t *prgROM = emuGBROM+16;
-		if(trainer)
+		if(strstr(argv[1],".gbc") != NULL || strstr(argv[1],".GBC") != NULL)
 		{
-			memcpy(emuPrgRAM+0x1000,prgROM,0x200);
-			prgROM += 512;
+			emuSaveName = malloc(strlen(argv[1])+1);
+			memcpy(emuSaveName,argv[1],strlen(argv[1])+1);
+			memcpy(emuSaveName+strlen(argv[1])-3,"sav",3);
 		}
-		uint8_t *chrROM = NULL;
-		if(chrROMsize)
+		else if(strstr(argv[1],".gb") != NULL || strstr(argv[1],".GB") != NULL)
 		{
-			chrROM = emuGBROM+16+prgROMsize;
-			if(trainer) chrROM += 512;
+			emuSaveName = malloc(strlen(argv[1])+2);
+			memcpy(emuSaveName,argv[1],strlen(argv[1])+1);
+			memcpy(emuSaveName+strlen(argv[1])-2,"sav",4);
+		}
+		if(!memInit())
+		{
+			free(emuGBROM);
+			printf("Exit...\n");
+			exit(EXIT_SUCCESS);
 		}
 		apuInitBufs();
 		cpuInit();
 		ppuInit();
-		memInit();
 		apuInit();
 		inputInit();
 		#if DEBUG_LOAD_INFO
@@ -129,34 +124,6 @@ int main(int argc, char** argv)
 		//printf("Used Mapper: %i\n", mapper);
 		//printf("PRG: 0x%x bytes PRG RAM: 0x%x bytes CHR: 0x%x bytes\n", prgROMsize, emuPrgRAMsize, chrROMsize);
 		#endif
-		/*if(!mapperInit(mapper, prgROM, prgROMsize, emuPrgRAM, emuPrgRAMsize, chrROM, chrROMsize))
-		{
-			printf("Mapper init failed!\n");
-			free(emuGBROM);
-			emuGBROM = NULL;
-			return EXIT_SUCCESS;
-		}
-		if(emuGBROM[6] & 8)
-			ppuSetNameTbl4Screen();
-		else if(emuGBROM[6] & 1)
-			ppuSetNameTblVertical();
-		else
-			ppuSetNameTblHorizontal();
-		#if DEBUG_LOAD_INFO
-		printf("Trainer: %i Saving: %i VRAM Mode: %s\n", trainer, emuSaveEnabled, (emuGBROM[6] & 1) ? "Vertical" : 
-			((!(emuGBROM[6] & 1)) ? "Horizontal" : "4-Screen"));
-		#endif
-		if(emuSaveEnabled)
-		{
-			emuSaveName = strdup(argv[1]);
-			memcpy(emuSaveName+strlen(emuSaveName)-3,"sav",3);
-			FILE *save = fopen(emuSaveName, "rb");
-			if(save)
-			{
-				fread(emuPrgRAM,1,emuPrgRAMsize,save);
-				fclose(save);
-			}
-		}*/
 	}
 	/*else if(argc >= 2 && (strstr(argv[1],".gbs") != NULL || strstr(argv[1],".GBS") != NULL))
 	{
@@ -244,20 +211,10 @@ static void gbEmuDeinit(void)
 	if(emuGBROM != NULL)
 		free(emuGBROM);
 	emuGBROM = NULL;
-	if(emuPrgRAM != NULL)
-	{
-		if(emuSaveEnabled)
-		{
-			FILE *save = fopen(emuSaveName, "wb");
-			if(save)
-			{
-				fwrite(emuPrgRAM,1,emuPrgRAMsize,save);
-				fclose(save);
-			}
-		}
-		free(emuPrgRAM);
-	}
-	emuPrgRAM = NULL;
+	memSaveGame();
+	if(emuSaveName != NULL)
+		free(emuSaveName);
+	emuSaveName = NULL;
 	if(textureImage != NULL)
 		free(textureImage);
 	textureImage = NULL;
@@ -300,7 +257,7 @@ static void gbEmuMainLoop(void)
 			//main CPU clock
 			if(!cpuCycle())
 			{
-				memDumpMainMem();
+				//memDumpMainMem();
 				exit(EXIT_SUCCESS);
 			}
 			if(memClock == 4)
@@ -403,7 +360,7 @@ static void gbEmuHandleKeyDown(unsigned char key, int x, int y)
 			inValReads[BUTTON_START]=1;
 			break;
 		case '\x1B': //Escape
-			memDumpMainMem();
+			//memDumpMainMem();
 			exit(EXIT_SUCCESS);
 			break;
 		case 'p':

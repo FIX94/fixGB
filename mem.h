@@ -8,12 +8,13 @@
 #ifndef _mem_h_
 #define _mem_h_
 
-void memInit();
+bool memInit();
 uint8_t memGet8(uint16_t addr);
 void memSet8(uint16_t addr, uint8_t val);
 void memSet16(uint16_t addr, uint16_t val);
 void memDumpMainMem();
 void memClockTimers();
+void memSaveGame();
 
 uint8_t memGetCurIrqList();
 void memClearCurIrqList(uint8_t num);

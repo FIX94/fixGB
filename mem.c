@@ -12,8 +12,9 @@
 #include "ppu.h"
 #include "apu.h"
 #include "input.h"
+#include "mbc.h"
 
-static uint8_t Ext_Mem[0x2000];
+static uint8_t Ext_Mem[0x20000];
 static uint8_t Main_Mem[0x2000];
 static uint8_t High_Mem[0x80];
 static uint8_t memLastVal;
@@ -27,16 +28,207 @@ static uint8_t timerRegVal;
 static uint8_t timerResetVal;
 static uint8_t timerRegClock;
 static uint8_t timerRegTimer;
-static uint8_t cBank;
-static uint32_t bankMask;
-static bool timerRegEnable;
-static bool extMemUsed;
-uint16_t extMask;
-extern uint8_t *emuGBROM;
+static bool timerRegEnable = false;
 
-void memInit()
+extern uint8_t *emuGBROM;
+static bool emuSaveEnabled = false;
+
+//from mbc.c
+extern uint16_t cBank;
+extern uint16_t extBank;
+extern uint16_t bankMask;
+extern uint16_t extMask;
+extern uint16_t extTotalMask;
+extern size_t extTotalSize;
+
+extern bool extMemUsed;
+extern bool bankUsed;
+extern bool extSelect;
+
+static void memLoadSave();
+
+static void memSetBankVal()
 {
-	bankMask = (0x8000<<(emuGBROM[0x148]&0xF))-1;
+	bankUsed = true;
+	switch(emuGBROM[0x148])
+	{
+		case 0:
+			printf("32KB ROM allowed\n");
+			bankMask = 1;
+			break;
+		case 1:
+			printf("64KB ROM allowed\n");
+			bankMask = 3;
+			break;
+		case 2:
+			printf("128KB ROM allowed\n");
+			bankMask = 7;
+			break;
+		case 3:
+			printf("256KB ROM allowed\n");
+			bankMask = 15;
+			break;
+		case 4:
+			printf("512KB ROM allowed\n");
+			bankMask = 31;
+			break;
+		case 5:
+			printf("1MB ROM allowed\n");
+			bankMask = 63;
+			break;
+		case 6:
+			printf("2MB ROM allowed\n");
+			bankMask = 127;
+			break;
+		case 7:
+			printf("4MB ROM allowed\n");
+			bankMask = 255;
+			break;
+		case 8:
+			printf("8MB ROM allowed\n");
+			bankMask = 511;
+			break;
+		case 0x52:
+			printf("1.1MB ROM allowed\n");
+			bankMask = 71;
+			break;
+		case 0x53:
+			printf("1.2MB ROM allowed\n");
+			bankMask = 79;
+			break;
+		case 0x54:
+			printf("1.5MB ROM allowed\n");
+			bankMask = 95;
+			break;
+		default:
+			printf("Unknown ROM Size, allowing 32KB ROM\n");
+			bankMask = 1;
+			break;
+	}
+}
+
+static void memSetExtVal()
+{
+	extMemUsed = true;
+	switch(emuGBROM[0x149])
+	{
+		case 0:
+			printf("No RAM allowed\n");
+			extTotalSize = 0;
+			extTotalMask = 0;
+			extMask = 0;
+		case 1:
+			printf("2KB RAM allowed\n");
+			extTotalSize = 0x800;
+			extTotalMask = 0x7FF;
+			extMask = 1;
+			break;
+		case 2:
+			printf("8KB RAM allowed\n");
+			extTotalSize = 0x2000;
+			extTotalMask = 0x1FFF;
+			extMask = 1;
+			break;
+		case 3:
+			printf("32KB RAM allowed\n");
+			extTotalSize = 0x8000;
+			extTotalMask = 0x1FFF;
+			extMask = 3;
+			break;
+		case 4:
+			printf("128KB RAM allowed\n");
+			extTotalSize = 0x20000;
+			extTotalMask = 0x1FFF;
+			extMask = 15;
+			break;
+		case 5:
+			printf("64KB RAM allowed\n");
+			extTotalSize = 0x10000;
+			extTotalMask = 0x1FFF;
+			extMask = 7;
+			break;
+		default:
+			printf("Unknwon RAM Size, allowing 8KB RAM\n");
+			extTotalMask = 0x1FFF;
+			extMask = 1;
+			break;
+	}
+}
+
+bool memInit()
+{
+	switch(emuGBROM[0x147])
+	{
+		case 0x00:
+			printf("ROM Only\n");
+			mbcInit(MBC_TYPE_NONE);
+			bankUsed = false;
+			extMemUsed = false;
+			break;
+		case 0x01:
+			printf("ROM Only (MBC1)\n");
+			mbcInit(MBC_TYPE_1);
+			memSetBankVal();
+			extMemUsed = false;
+			break;
+		case 0x02:
+			printf("ROM and RAM (without save) (MBC1)\n");
+			mbcInit(MBC_TYPE_1);
+			memSetBankVal();
+			memSetExtVal();
+			break;
+		case 0x03:
+			printf("ROM and RAM (with save) (MBC1)\n");
+			mbcInit(MBC_TYPE_1);
+			memSetBankVal();
+			memSetExtVal();
+			memLoadSave();
+			break;
+		case 0x11:
+			printf("ROM Only (MBC3)\n");
+			mbcInit(MBC_TYPE_3);
+			memSetBankVal();
+			extMemUsed = false;
+			break;
+		case 0x12:
+			printf("ROM and RAM (without save) (MBC3)\n");
+			mbcInit(MBC_TYPE_3);
+			memSetBankVal();
+			memSetExtVal();
+			break;
+		case 0x13:
+			printf("ROM and RAM (with save) (MBC3)\n");
+			mbcInit(MBC_TYPE_3);
+			memSetBankVal();
+			memSetExtVal();
+			memLoadSave();
+			break;
+		case 0x19:
+		case 0x1C:
+			printf("ROM Only (MBC5)\n");
+			mbcInit(MBC_TYPE_5);
+			memSetBankVal();
+			extMemUsed = false;
+			break;
+		case 0x1A:
+		case 0x1D:
+			printf("ROM and RAM (without save) (MBC5)\n");
+			mbcInit(MBC_TYPE_5);
+			memSetBankVal();
+			memSetExtVal();
+			break;
+		case 0x1B:
+		case 0x1E:
+			printf("ROM and RAM (with save) (MBC5)\n");
+			mbcInit(MBC_TYPE_5);
+			memSetBankVal();
+			memSetExtVal();
+			memLoadSave();
+			break;
+		default:
+			printf("Unsupported Type %02x!\n", emuGBROM[0x147]);
+			return false;
+	}
 	extMemUsed = (emuGBROM[0x149] > 0);
 	if(extMemUsed)
 	{
@@ -50,7 +242,6 @@ void memInit()
 	memLastVal = 0;
 	irqEnableReg = 0;
 	irqFlagsReg = 0;
-	cBank = 1;
 	divRegVal = 0;
 	divRegClock = 1;
 	timerReg = 0;
@@ -59,6 +250,7 @@ void memInit()
 	timerRegClock = 1;
 	timerRegTimer = 64; //262144 / 64 = 4096
 	timerRegEnable = false;
+	return true;
 }
 
 uint8_t memGet8(uint16_t addr)
@@ -68,11 +260,11 @@ uint8_t memGet8(uint16_t addr)
 	if(addr < 0x4000)
 		val = emuGBROM[addr];
 	else if(addr < 0x8000)
-		val = emuGBROM[((cBank<<14)+(addr&0x3FFF))&bankMask];
+		val = bankUsed?(emuGBROM[(cBank<<14)+(addr&0x3FFF)]):emuGBROM[addr];
 	else if(addr >= 0x8000 && addr < 0xA000)
 		val = ppuGet8(addr);
 	else if(addr >= 0xA000 && addr < 0xC000 && extMemUsed)
-		val = Ext_Mem[(addr&0x1FFF)&extMask];
+		val = Ext_Mem[((extBank<<13)+(addr&0x1FFF))&extTotalMask];
 	else if(addr >= 0xC000 && addr < 0xFE00)
 		val = Main_Mem[addr&0x1FFF];
 	else if(addr >= 0xFE00 && addr < 0xFEA0)
@@ -107,17 +299,12 @@ extern uint32_t cpu_oam_dma;
 extern bool cpu_odd_cycle;
 void memSet8(uint16_t addr, uint8_t val)
 {
-	if(addr >= 0x2000 && addr < 0x4000)
-	{
-		//printf("%02x\n",val);
-		cBank = val;
-		if(cBank == 0)
-			cBank = 1;
-	}
+	if(addr < 0x8000)
+		mbcSet8(addr, val);
 	if(addr >= 0x8000 && addr < 0xA000)
 		ppuSet8(addr, val);
 	else if(addr >= 0xA000 && addr < 0xC000 && extMemUsed)
-		Ext_Mem[(addr&0x1FFF)&extMask] = val;
+		Ext_Mem[((extBank<<13)+(addr&0x1FFF))&extTotalMask] = val;
 	else if(addr >= 0xC000 && addr < 0xFE00)
 		Main_Mem[addr&0x1FFF] = val;
 	else if(addr >= 0xFE00 && addr < 0xFEA0)
@@ -184,7 +371,7 @@ void memEnableStatIrq()
 	irqFlagsReg |= 2;
 }
 
-#define DEBUG_MEM_DUMP 1
+#define DEBUG_MEM_DUMP 0
 
 void memDumpMainMem()
 {
@@ -203,6 +390,42 @@ void memDumpMainMem()
 	}
 	ppuDumpMem();
 	#endif
+}
+
+extern char *emuSaveName;
+void memLoadSave()
+{
+	if(emuSaveName && extTotalSize)
+	{
+		emuSaveEnabled = true;
+		FILE *save = fopen(emuSaveName, "rb");
+		if(save)
+		{
+			fseek(save,0,SEEK_END);
+			size_t saveSize = ftell(save);
+			if(saveSize == extTotalSize)
+			{
+				rewind(save);
+				fread(Ext_Mem,1,saveSize,save);
+			}
+			else
+				printf("Save file ignored\n");
+			fclose(save);
+		}
+	}
+}
+
+void memSaveGame()
+{
+	if(emuSaveName && extMask && emuSaveEnabled)
+	{
+		FILE *save = fopen(emuSaveName, "wb");
+		if(save)
+		{
+			fwrite(Ext_Mem,1,extTotalSize,save);
+			fclose(save);
+		}
+	}
 }
 
 //clocked at 262144 Hz
