@@ -17,6 +17,7 @@
 static uint8_t Ext_Mem[0x20000];
 static uint8_t Main_Mem[0x2000];
 static uint8_t High_Mem[0x80];
+static uint8_t gbs_prevValReads[8];
 static uint8_t memLastVal;
 static uint8_t irqEnableReg;
 static uint8_t irqFlagsReg;
@@ -154,88 +155,99 @@ static void memSetExtVal()
 			break;
 	}
 }
-
-bool memInit()
+static uint8_t curGBS = 0;
+extern uint8_t gbsTracksTotal;
+bool memInit(bool romcheck, bool gbs)
 {
-	switch(emuGBROM[0x147])
+	if(romcheck)
 	{
-		case 0x00:
-			printf("ROM Only\n");
-			mbcInit(MBC_TYPE_NONE);
-			bankUsed = false;
-			extMemUsed = false;
-			break;
-		case 0x01:
-			printf("ROM Only (MBC1)\n");
-			mbcInit(MBC_TYPE_1);
-			memSetBankVal();
-			extMemUsed = false;
-			break;
-		case 0x02:
-			printf("ROM and RAM (without save) (MBC1)\n");
-			mbcInit(MBC_TYPE_1);
-			memSetBankVal();
-			memSetExtVal();
-			break;
-		case 0x03:
-			printf("ROM and RAM (with save) (MBC1)\n");
-			mbcInit(MBC_TYPE_1);
-			memSetBankVal();
-			memSetExtVal();
-			memLoadSave();
-			break;
-		case 0x11:
-			printf("ROM Only (MBC3)\n");
-			mbcInit(MBC_TYPE_3);
-			memSetBankVal();
-			extMemUsed = false;
-			break;
-		case 0x12:
-			printf("ROM and RAM (without save) (MBC3)\n");
-			mbcInit(MBC_TYPE_3);
-			memSetBankVal();
-			memSetExtVal();
-			break;
-		case 0x13:
-			printf("ROM and RAM (with save) (MBC3)\n");
-			mbcInit(MBC_TYPE_3);
-			memSetBankVal();
-			memSetExtVal();
-			memLoadSave();
-			break;
-		case 0x19:
-		case 0x1C:
-			printf("ROM Only (MBC5)\n");
-			mbcInit(MBC_TYPE_5);
-			memSetBankVal();
-			extMemUsed = false;
-			break;
-		case 0x1A:
-		case 0x1D:
-			printf("ROM and RAM (without save) (MBC5)\n");
-			mbcInit(MBC_TYPE_5);
-			memSetBankVal();
-			memSetExtVal();
-			break;
-		case 0x1B:
-		case 0x1E:
-			printf("ROM and RAM (with save) (MBC5)\n");
-			mbcInit(MBC_TYPE_5);
-			memSetBankVal();
-			memSetExtVal();
-			memLoadSave();
-			break;
-		default:
-			printf("Unsupported Type %02x!\n", emuGBROM[0x147]);
-			return false;
-	}
-	extMemUsed = (emuGBROM[0x149] > 0);
-	if(extMemUsed)
-	{
-		if(emuGBROM[0x149] == 1)
-			extMask = 0x7FF;
+		if(gbs)
+		{
+			printf("GBS Mode\n");
+			mbcInit(MBC_TYPE_GBS);
+			bankUsed = true;
+			extMemUsed = true;
+			printf("8KB RAM allowed\n");
+			extTotalSize = 0x2000;
+			extTotalMask = 0x1FFF;
+			extMask = 1;
+			memset(gbs_prevValReads,0,8);
+		}
 		else
-			extMask = 0x1FFF;
+		{
+			switch(emuGBROM[0x147])
+			{
+				case 0x00:
+					printf("ROM Only\n");
+					mbcInit(MBC_TYPE_NONE);
+					bankUsed = false;
+					extMemUsed = false;
+					break;
+				case 0x01:
+					printf("ROM Only (MBC1)\n");
+					mbcInit(MBC_TYPE_1);
+					memSetBankVal();
+					extMemUsed = false;
+					break;
+				case 0x02:
+					printf("ROM and RAM (without save) (MBC1)\n");
+					mbcInit(MBC_TYPE_1);
+					memSetBankVal();
+					memSetExtVal();
+					break;
+				case 0x03:
+					printf("ROM and RAM (with save) (MBC1)\n");
+					mbcInit(MBC_TYPE_1);
+					memSetBankVal();
+					memSetExtVal();
+					memLoadSave();
+					break;
+				case 0x11:
+					printf("ROM Only (MBC3)\n");
+					mbcInit(MBC_TYPE_3);
+					memSetBankVal();
+					extMemUsed = false;
+					break;
+				case 0x12:
+					printf("ROM and RAM (without save) (MBC3)\n");
+					mbcInit(MBC_TYPE_3);
+					memSetBankVal();
+					memSetExtVal();
+					break;
+				case 0x13:
+					printf("ROM and RAM (with save) (MBC3)\n");
+					mbcInit(MBC_TYPE_3);
+					memSetBankVal();
+					memSetExtVal();
+					memLoadSave();
+					break;
+				case 0x19:
+				case 0x1C:
+					printf("ROM Only (MBC5)\n");
+					mbcInit(MBC_TYPE_5);
+					memSetBankVal();
+					extMemUsed = false;
+					break;
+				case 0x1A:
+				case 0x1D:
+					printf("ROM and RAM (without save) (MBC5)\n");
+					mbcInit(MBC_TYPE_5);
+					memSetBankVal();
+					memSetExtVal();
+					break;
+				case 0x1B:
+				case 0x1E:
+					printf("ROM and RAM (with save) (MBC5)\n");
+					mbcInit(MBC_TYPE_5);
+					memSetBankVal();
+					memSetExtVal();
+					memLoadSave();
+					break;
+				default:
+					printf("Unsupported Type %02x!\n", emuGBROM[0x147]);
+					return false;
+			}
+		}
 	}
 	memset(Main_Mem,0,0x2000);
 	memset(High_Mem,0,0x80);
@@ -251,6 +263,13 @@ bool memInit()
 	timerRegTimer = 64; //262144 / 64 = 4096
 	timerRegEnable = false;
 	return true;
+}
+
+void memStartGBS()
+{
+	curGBS = 1;
+	printf("Track %i/%i         ", curGBS, gbsTracksTotal);
+	cpuLoadGBS(curGBS-1);
 }
 
 uint8_t memGet8(uint16_t addr)
@@ -428,9 +447,40 @@ void memSaveGame()
 	}
 }
 
+extern bool gbEmuGBSPlayback;
+extern bool gbsTimerMode;
+extern uint8_t inValReads[8];
+
 //clocked at 262144 Hz
 void memClockTimers()
 {
+	if(gbEmuGBSPlayback)
+	{
+		if(inValReads[BUTTON_RIGHT] && !gbs_prevValReads[BUTTON_RIGHT])
+		{
+			gbs_prevValReads[BUTTON_RIGHT] = inValReads[BUTTON_RIGHT];
+			curGBS++;
+			if(curGBS > gbsTracksTotal)
+				curGBS = 1;
+			printf("\rTrack %i/%i         ", curGBS, gbsTracksTotal);
+			cpuLoadGBS(curGBS-1);
+		}
+		else if(!inValReads[BUTTON_RIGHT])
+			gbs_prevValReads[BUTTON_RIGHT] = 0;
+		
+		if(inValReads[BUTTON_LEFT] && !gbs_prevValReads[BUTTON_LEFT])
+		{
+			gbs_prevValReads[BUTTON_LEFT] = inValReads[BUTTON_LEFT];
+			curGBS--;
+			if(curGBS < 1)
+				curGBS = gbsTracksTotal;
+			printf("\rTrack %i/%i         ", curGBS, gbsTracksTotal);
+			cpuLoadGBS(curGBS-1);
+		}
+		else if(!inValReads[BUTTON_LEFT])
+			gbs_prevValReads[BUTTON_LEFT] = 0;
+	}
+
 	//clocked at 16384 Hz (262144 / 16 = 16384)
 	if(divRegClock == 16)
 	{
@@ -451,7 +501,10 @@ void memClockTimers()
 		{
 			//printf("Timer interrupt\n");
 			timerRegVal = timerResetVal;
-			irqFlagsReg |= 4;
+			if(!gbEmuGBSPlayback)
+				irqFlagsReg |= 4;
+			else if(gbsTimerMode)
+				cpuPlayGBS();
 		}
 		timerRegClock = 1;
 	}

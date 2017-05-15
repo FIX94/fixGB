@@ -17,6 +17,7 @@ enum {
 	MBC_TYPE_5,
 	MBC_TYPE_6,
 	MBC_TYPE_7,
+	MBC_TYPE_GBS,
 };
 
 typedef void (*set8FuncT)(uint16_t, uint8_t);

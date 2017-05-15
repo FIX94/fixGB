@@ -27,6 +27,7 @@ static void noSet8(uint16_t addr, uint8_t val);
 static void mbc1Set8(uint16_t addr, uint8_t val);
 static void mbc3Set8(uint16_t addr, uint8_t val);
 static void mbc5Set8(uint16_t addr, uint8_t val);
+static void gbsSet8(uint16_t addr, uint8_t val);
 
 void mbcInit(uint8_t type)
 {
@@ -36,6 +37,8 @@ void mbcInit(uint8_t type)
 		mbcSet8 = mbc3Set8;
 	else if(type == MBC_TYPE_5)
 		mbcSet8 = mbc5Set8;
+	else if(type == MBC_TYPE_GBS)
+		mbcSet8 = gbsSet8;
 	else
 		mbcSet8 = noSet8;
 }
@@ -141,4 +144,10 @@ static void mbc5Set8(uint16_t addr, uint8_t val)
 			extBank &= extMask;
 		}
 	}
+}
+
+static void gbsSet8(uint16_t addr, uint8_t val)
+{
+	if(addr >= 0x2000 && addr < 0x3000)
+		cBank = val;
 }

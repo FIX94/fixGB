@@ -26,7 +26,7 @@
 #define DEBUG_KEY 0
 #define DEBUG_LOAD_INFO 1
 
-static const char *VERSION_STRING = "fixGB Alpha v0.1";
+static const char *VERSION_STRING = "fixGB Alpha v0.2";
 
 static void gbEmuDisplayFrame(void);
 static void gbEmuMainLoop(void);
@@ -43,11 +43,15 @@ char *emuSaveName = NULL;
 uint8_t *textureImage = NULL;
 bool nesPause = false;
 bool ppuDebugPauseFrame = false;
-bool doOverscan = true;
 bool gbEmuGBSPlayback = false;
+bool gbsTimerMode = false;
+uint16_t gbsLoadAddr = 0;
+uint16_t gbsInitAddr = 0;
+uint16_t gbsPlayAddr = 0;
+uint16_t gbsSP = 0;
+uint8_t gbsTracksTotal = 0, gbsTMA = 0, gbsTAC = 0;
 
 static bool inPause = false;
-static bool inOverscanToggle = false;
 static bool inResize = false;
 
 #if WINDOWS_BUILD
@@ -74,14 +78,66 @@ static const uint32_t visibleImg = VISIBLE_DOTS*VISIBLE_LINES*4;
 static uint8_t scaleFactor = 3;
 static uint32_t mainLoopRuns;
 static uint16_t mainLoopPos;
+static uint8_t cpuTimer;
 //from input.c
 extern uint8_t inValReads[8];
 
 int main(int argc, char** argv)
 {
 	puts(VERSION_STRING);
-	if(argc >= 2 && (strstr(argv[1],".gb") != NULL || strstr(argv[1],".GB") != NULL
-				|| strstr(argv[1],".gbc") != NULL || strstr(argv[1],".GBC") != NULL))
+	if(argc >= 2 && (strstr(argv[1],".gbs") != NULL || strstr(argv[1],".GBS") != NULL))
+	{
+		FILE *gbF = fopen(argv[1],"rb");
+		if(!gbF) return EXIT_SUCCESS;
+		fseek(gbF,0,SEEK_END);
+		size_t fsize = ftell(gbF);
+		rewind(gbF);
+		uint8_t *tmpROM = malloc(fsize);
+		fread(tmpROM,1,fsize,gbF);
+		fclose(gbF);
+		gbsTracksTotal = tmpROM[4];
+		gbsLoadAddr = (tmpROM[6])|(tmpROM[7]<<8);
+		gbsInitAddr = (tmpROM[8])|(tmpROM[9]<<8);
+		gbsPlayAddr = (tmpROM[0xA])|(tmpROM[0xB]<<8);
+		gbsSP = (tmpROM[0xC])|(tmpROM[0xD]<<8);
+		//should give more than enough room for everything
+		uint32_t totalROMsize = (fsize-0x70+gbsLoadAddr+0x7FFF)&(~0x7FFF);
+		emuGBROM = malloc(totalROMsize);
+		memset(emuGBROM,0xFF,totalROMsize);
+		memcpy(emuGBROM+gbsLoadAddr,tmpROM+0x70,fsize-0x70);
+		memInit(true,true);
+		gbsTMA = tmpROM[0xE];
+		gbsTAC = tmpROM[0xF];
+		if(gbsTAC&4)
+		{
+			printf("Play Timing: Timer\n");
+			gbsTimerMode = true;
+		}
+		else
+		{
+			printf("Play Timing: VSync\n");
+			gbsTimerMode = false;
+		}
+		if(gbsTAC&0x80)
+		{
+			printf("CPU: CGB Speed\n");
+			cpuTimer = 2;
+		}
+		else
+		{
+			printf("CPU: DMG Speed\n");
+			cpuTimer = 4;
+		}
+		if(tmpROM[0x10] != 0)
+			printf("Game: %.32s\n",(char*)(tmpROM+0x10));
+		free(tmpROM);
+		apuInitBufs();
+		//does all inits for us
+		memStartGBS();
+		gbEmuGBSPlayback = true;
+	}
+	else if(argc >= 2 && (strstr(argv[1],".gbc") != NULL || strstr(argv[1],".GBC") != NULL
+						|| strstr(argv[1],".gb") != NULL || strstr(argv[1],".GB") != NULL))
 	{
 		FILE *gbF = fopen(argv[1],"rb");
 		if(!gbF) return EXIT_SUCCESS;
@@ -108,12 +164,14 @@ int main(int argc, char** argv)
 			memcpy(emuSaveName,argv[1],strlen(argv[1])+1);
 			memcpy(emuSaveName+strlen(argv[1])-2,"sav",4);
 		}
-		if(!memInit())
+		if(!memInit(true,false))
 		{
 			free(emuGBROM);
 			printf("Exit...\n");
 			exit(EXIT_SUCCESS);
 		}
+		//DMG Mode
+		cpuTimer = 4;
 		apuInitBufs();
 		cpuInit();
 		ppuInit();
@@ -125,26 +183,6 @@ int main(int argc, char** argv)
 		//printf("PRG: 0x%x bytes PRG RAM: 0x%x bytes CHR: 0x%x bytes\n", prgROMsize, emuPrgRAMsize, chrROMsize);
 		#endif
 	}
-	/*else if(argc >= 2 && (strstr(argv[1],".gbs") != NULL || strstr(argv[1],".GBS") != NULL))
-	{
-		FILE *gbF = fopen(argv[1],"rb");
-		if(!gbF) return EXIT_SUCCESS;
-		fseek(gbF,0,SEEK_END);
-		size_t fsize = ftell(gbF);
-		rewind(gbF);
-		emuGBROM = malloc(fsize);
-		fread(emuGBROM,1,fsize,gbF);
-		fclose(gbF);
-		emuPrgRAMsize = 0x2000;
-		emuPrgRAM = malloc(emuPrgRAMsize);
-		if(!mapperInitGBS(emuGBROM, fsize, emuPrgRAM, emuPrgRAMsize))
-		{
-			printf("GBS init failed!\n");
-			free(emuGBROM);
-			return EXIT_SUCCESS;
-		}
-		gbEmuGBSPlayback = true;
-	}*/
 	if(emuGBROM == NULL)
 		return EXIT_SUCCESS;
 	#if WINDOWS_BUILD
@@ -229,6 +267,7 @@ bool emuSkipFrame = false;
 //static bool emuApuDoCycle = false;
 
 static uint16_t mainClock = 1;
+static uint16_t cpuClock = 1;
 static uint16_t memClock = 1;
 //static uint16_t vrc7Clock = 1;
 
@@ -244,6 +283,18 @@ static void gbEmuMainLoop(void)
 			audioSleep();
 			return;
 		}
+		if(cpuClock == cpuTimer)
+		{
+			//main CPU clock
+			if(!cpuCycle())
+			{
+				//memDumpMainMem();
+				exit(EXIT_SUCCESS);
+			}
+			cpuClock = 1;
+		}
+		else
+			cpuClock++;
 		if(mainClock == 4)
 		{
 			if(!apuCycle())
@@ -253,12 +304,6 @@ static void gbEmuMainLoop(void)
 				#endif
 				audioSleep();
 				return;
-			}
-			//main CPU clock
-			if(!cpuCycle())
-			{
-				//memDumpMainMem();
-				exit(EXIT_SUCCESS);
 			}
 			if(memClock == 4)
 			{
@@ -280,26 +325,31 @@ static void gbEmuMainLoop(void)
 		apuClockTimers();
 		if(!ppuCycle())
 			exit(EXIT_SUCCESS);
-		if(!gbEmuGBSPlayback && ppuDrawDone())
+		if(ppuDrawDone())
 		{
-			//printf("%i\n",mCycles);
-			//mCycles = 0;
-			emuRenderFrame = true;
-			#if (WINDOWS_BUILD && DEBUG_HZ)
-			emuTimesCalled++;
-			DWORD end = GetTickCount();
-			emuTotalElapsed += end - emuFrameStart;
-			if(emuTotalElapsed >= 1000)
+			if(!gbEmuGBSPlayback)
 			{
-				printf("\r%iHz   ", emuTimesCalled);
-				emuTimesCalled = 0;
-				emuTotalElapsed = 0;
+				//printf("%i\n",mCycles);
+				//mCycles = 0;
+				emuRenderFrame = true;
+				#if (WINDOWS_BUILD && DEBUG_HZ)
+				emuTimesCalled++;
+				DWORD end = GetTickCount();
+				emuTotalElapsed += end - emuFrameStart;
+				if(emuTotalElapsed >= 1000)
+				{
+					printf("\r%iHz   ", emuTimesCalled);
+					emuTimesCalled = 0;
+					emuTotalElapsed = 0;
+				}
+				emuFrameStart = end;
+				#endif
+				glutPostRedisplay();
+				if(ppuDebugPauseFrame)
+					nesPause = true;
 			}
-			emuFrameStart = end;
-			#endif
-			glutPostRedisplay();
-			if(ppuDebugPauseFrame)
-				nesPause = true;
+			else if(!gbsTimerMode)
+				cpuPlayGBS();
 		}
 	}
 	while(mainLoopPos--);
@@ -437,14 +487,6 @@ static void gbEmuHandleKeyDown(unsigned char key, int x, int y)
 				glutReshapeWindow(VISIBLE_DOTS*9, VISIBLE_LINES*9);
 			}
 			break;
-		case 'o':
-		case 'O':
-			if(!inOverscanToggle)
-			{
-				inOverscanToggle = true;
-				doOverscan ^= true;
-			}
-			break;
 		default:
 			break;
 	}
@@ -497,10 +539,6 @@ static void gbEmuHandleKeyUp(unsigned char key, int x, int y)
 		case '4': case '5':	case '6':
 		case '7': case '8':	case '9':
 			inResize = false;
-			break;
-		case 'o':
-		case 'O':
-			inOverscanToggle = false;
 			break;
 		default:
 			break;

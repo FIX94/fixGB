@@ -8,7 +8,8 @@
 #ifndef _mem_h_
 #define _mem_h_
 
-bool memInit();
+bool memInit(bool romcheck, bool gbs);
+void memStartGBS();
 uint8_t memGet8(uint16_t addr);
 void memSet8(uint16_t addr, uint8_t val);
 void memSet16(uint16_t addr, uint16_t val);

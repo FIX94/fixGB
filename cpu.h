@@ -11,5 +11,7 @@
 void cpuInit();
 bool cpuCycle();
 uint16_t cpuCurPC();
+void cpuLoadGBS(uint8_t song);
+void cpuPlayGBS();
 
 #endif

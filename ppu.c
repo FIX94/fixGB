@@ -35,6 +35,8 @@
 #define PPU_SPRITE_FLIP_Y (1<<6)
 #define PPU_SPRITE_PRIO (1<<7)
 
+static uint8_t ppuDoSprites(uint8_t color, uint8_t tCol);
+
 extern uint8_t *textureImage;
 
 static uint32_t ppuClock;
@@ -183,76 +185,7 @@ bool ppuCycle()
 				tCol = (~(PPU_Reg[7]>>(color*2)))&3;
 			}
 			if(PPU_Reg[0]&PPU_SPRITE_ENABLE)
-			{
-				uint8_t i;
-				uint8_t cSpriteAnd = (PPU_Reg[0] & PPU_SPRITE_8_16) ? 15 : 7;
-				for(i = 0; i < ppuOAM2pos; i++)
-				{
-					uint8_t OAMcXpos = PPU_OAM2[(i<<2)+1];
-					if(OAMcXpos >= 168)
-						continue;
-					int16_t cmpPos = ((int16_t)OAMcXpos)-8;
-					if(cmpPos <= ppuDots && (cmpPos+8) > ppuDots)
-					{
-						uint8_t cSpriteByte3 = PPU_OAM2[(i<<2)+3];
-						uint8_t tVal = PPU_OAM2[(i<<2)+2];
-						uint16_t tPos = tVal*16;
-
-						uint8_t OAMcYpos = PPU_OAM2[(i<<2)];
-						uint8_t cmpYPos = OAMcYpos-16;
-						uint8_t cSpriteY = (PPU_Reg[4] - cmpYPos)&cSpriteAnd;
-						uint8_t cSpriteAdd = 0; //used to select which 8 by 16 tile
-						if(cSpriteY > 7) //8 by 16 select
-						{
-							cSpriteAdd = 16;
-							cSpriteY &= 7;
-						}
-						if(cSpriteByte3 & PPU_SPRITE_FLIP_Y)
-						{
-							cSpriteY ^= 7;
-							if(PPU_Reg[0] & PPU_SPRITE_8_16)
-								cSpriteAdd ^= 16; //8 by 16 select
-						}
-						tPos+=(cSpriteY)*2;
-
-						ChrRegA = PPU_VRAM[(tPos+cSpriteAdd)&0x1FFF];
-						ChrRegB = PPU_VRAM[(tPos+cSpriteAdd+1)&0x1FFF];
-
-						uint8_t cSpriteX = (ppuDots - OAMcXpos)&7;
-						if(cSpriteByte3 & PPU_SPRITE_FLIP_X)
-							cSpriteX ^= 7;
-						uint8_t sprCol = 0;
-						if(ChrRegA & (0x80>>cSpriteX))
-							sprCol |= 1;
-						if(ChrRegB & (0x80>>cSpriteX))
-							sprCol |= 2;
-
-						//done looking at sprites, we have to
-						//always return the first one we find
-						if(sprCol != 0)
-						{
-							//sprite has highest priority, return sprite
-							if((cSpriteByte3 & PPU_SPRITE_PRIO) == 0)
-							{
-								if(cSpriteByte3 & PPU_SPRITE_PAL)
-									tCol = (~(PPU_Reg[9]>>(sprCol*2)))&3;
-								else
-									tCol = (~(PPU_Reg[8]>>(sprCol*2)))&3;
-								break;
-							} //sprite has low priority and BG is not 0, return BG
-							else if((color&3) != 0)
-								break;
-							//background is 0 so return sprite
-							if(cSpriteByte3 & PPU_SPRITE_PAL)
-								tCol = (~(PPU_Reg[9]>>(sprCol*2)))&3;
-							else
-								tCol = (~(PPU_Reg[8]>>(sprCol*2)))&3;
-							break;
-						}
-						//Sprite is 0, keep looking for sprites
-					}
-				}
-			}
+				tCol = ppuDoSprites(color, tCol);
 			uint8_t draw = (tCol == 0) ? 0 : (tCol == 1) ? 0x55 : (tCol == 2) ? 0xAA : 0xFF;
 			{
 				size_t drawPos = (ppuDots*4)+(PPU_Reg[4]*160*4);
@@ -319,9 +252,19 @@ uint8_t ppuGet8(uint16_t addr)
 {
 	uint8_t val = 0;
 	if(addr >= 0x8000 && addr < 0xA000)
-		val = PPU_VRAM[addr&0x1FFF];
+	{
+		if(!(PPU_Reg[0] & PPU_ENABLE) || (ppuMode != 3))
+			val = PPU_VRAM[addr&0x1FFF];
+		else
+			val = 0xFF;
+	}
 	else if(addr >= 0xFE00 && addr < 0xFEA0)
-		val = PPU_OAM[addr&0xFF];
+	{
+		if(!(PPU_Reg[0] & PPU_ENABLE) || (ppuMode == 0) || (ppuMode == 1))
+			val = PPU_OAM[addr&0xFF];
+		else
+			val = 0xFF;
+	}
 	else if(addr >= 0xFF40 && addr < 0xFF4C)
 	{
 		if(addr == 0xFF41)
@@ -342,9 +285,15 @@ uint8_t ppuGet8(uint16_t addr)
 void ppuSet8(uint16_t addr, uint8_t val)
 {
 	if(addr >= 0x8000 && addr < 0xA000)
-		PPU_VRAM[addr&0x1FFF] = val;
+	{
+		if(!(PPU_Reg[0] & PPU_ENABLE) || (ppuMode != 3))
+			PPU_VRAM[addr&0x1FFF] = val;
+	}
 	else if(addr >= 0xFE00 && addr < 0xFEA0)
-		PPU_OAM[addr&0xFF] = val;
+	{
+		if(!(PPU_Reg[0] & PPU_ENABLE) || (ppuMode == 0) || (ppuMode == 1))
+			PPU_OAM[addr&0xFF] = val;
+	}
 	else if(addr >= 0xFF40 && addr < 0xFF4C)
 	{
 		if(addr == 0xFF46) //OAM DMA
@@ -362,7 +311,12 @@ void ppuSet8(uint16_t addr, uint8_t val)
 				PPU_Reg[addr&0xF] = (val&(~7));
 			else //other R/W regs
 				PPU_Reg[addr&0xF] = val;
-			//if(addr == 0xFF40)
+			if(addr == 0xFF40 && !(val&PPU_ENABLE))
+			{
+				PPU_Reg[4] = 0;
+				ppuClock = 0;
+				ppuMode = 2;
+			}
 			//	printf("ppuSet8(%04x, %02x)\n",addr,val);
 		}
 	}
@@ -404,4 +358,86 @@ bool ppuInVBlank()
 	}
 	ppuVBlankTriggered = false;
 	return false;
+}
+
+static uint8_t ppuDoSprites(uint8_t color, uint8_t tCol)
+{
+	uint8_t i;
+	uint8_t cSpriteAnd = (PPU_Reg[0] & PPU_SPRITE_8_16) ? 15 : 7;
+	uint8_t cPrioSpriteX = 0xFF;
+	uint8_t ChrRegA = 0, ChrRegB = 0;
+	for(i = 0; i < ppuOAM2pos; i++)
+	{
+		uint8_t OAMcXpos = PPU_OAM2[(i<<2)+1];
+		if(OAMcXpos >= 168)
+			continue;
+		int16_t cmpPos = ((int16_t)OAMcXpos)-8;
+		if(cmpPos <= ppuDots && (cmpPos+8) > ppuDots)
+		{
+			uint8_t cSpriteByte3 = PPU_OAM2[(i<<2)+3];
+			uint8_t tVal = PPU_OAM2[(i<<2)+2];
+			uint16_t tPos = tVal*16;
+
+			uint8_t OAMcYpos = PPU_OAM2[(i<<2)];
+			uint8_t cmpYPos = OAMcYpos-16;
+			uint8_t cSpriteY = (PPU_Reg[4] - cmpYPos)&cSpriteAnd;
+			uint8_t cSpriteAdd = 0; //used to select which 8 by 16 tile
+			if(cSpriteY > 7) //8 by 16 select
+			{
+				cSpriteAdd = 16;
+				cSpriteY &= 7;
+			}
+			if(cSpriteByte3 & PPU_SPRITE_FLIP_Y)
+			{
+				cSpriteY ^= 7;
+				if(PPU_Reg[0] & PPU_SPRITE_8_16)
+					cSpriteAdd ^= 16; //8 by 16 select
+			}
+			tPos+=(cSpriteY)*2;
+
+			ChrRegA = PPU_VRAM[(tPos+cSpriteAdd)&0x1FFF];
+			ChrRegB = PPU_VRAM[(tPos+cSpriteAdd+1)&0x1FFF];
+
+			uint8_t cSpriteX = (ppuDots - OAMcXpos)&7;
+			if(cSpriteByte3 & PPU_SPRITE_FLIP_X)
+				cSpriteX ^= 7;
+			uint8_t sprCol = 0;
+			if(ChrRegA & (0x80>>cSpriteX))
+				sprCol |= 1;
+			if(ChrRegB & (0x80>>cSpriteX))
+				sprCol |= 2;
+
+			//found possible candidate to display
+			if(sprCol != 0)
+			{
+				//there already was a sprite set with lower X
+				if(cPrioSpriteX < OAMcXpos)
+					continue;
+				//sprite has highest priority, return sprite
+				if((cSpriteByte3 & PPU_SPRITE_PRIO) == 0)
+				{
+					//sprite so far has highest prio so set color
+					if(cSpriteByte3 & PPU_SPRITE_PAL)
+						tCol = (~(PPU_Reg[9]>>(sprCol*2)))&3;
+					else
+						tCol = (~(PPU_Reg[8]>>(sprCol*2)))&3;
+					//keep looking if there is a lower X
+					cPrioSpriteX = OAMcXpos;
+					continue;
+				} //sprite has low priority and BG is not 0, keep BG for now
+				else if((color&3) != 0)
+					continue;
+				//background is 0 so set color
+				if(cSpriteByte3 & PPU_SPRITE_PAL)
+					tCol = (~(PPU_Reg[9]>>(sprCol*2)))&3;
+				else
+					tCol = (~(PPU_Reg[8]>>(sprCol*2)))&3;
+				//keep looking if there is a lower X
+				cPrioSpriteX = OAMcXpos;
+				continue;
+			}
+			//Sprite is 0, keep looking for sprites
+		}
+	}
+	return tCol;
 }

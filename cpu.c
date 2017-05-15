@@ -9,6 +9,8 @@
 #include <stdbool.h>
 #include <inttypes.h>
 #include "cpu.h"
+#include "apu.h"
+#include "ppu.h"
 #include "mem.h"
 #include "input.h"
 
@@ -16,6 +18,13 @@
 #define P_FLAG_H (1<<5)
 #define P_FLAG_N (1<<6)
 #define P_FLAG_Z (1<<7)
+
+//from main.c
+extern bool gbEmuGBSPlayback;
+extern uint16_t gbsLoadAddr;
+extern uint16_t gbsInitAddr;
+extern uint16_t gbsPlayAddr;
+extern uint16_t gbsSP;
 
 void cpuSetupActionArr();
 
@@ -984,6 +993,7 @@ bool firstIrq = false, secondIrq = false;
 
 bool cpuHandleIrqUpdates()
 {
+	if(gbEmuGBSPlayback) return false;
 	if(!irqEnable) return false;
 	uint8_t irqList = (memGetCurIrqList());
 	if(irqList & 1)
@@ -1036,6 +1046,12 @@ void cpuGetInstruction()
 	if(cpuHandleIrqUpdates())
 	{
 		cpuHaltLoop = false;
+		cpu_arr_pos = 0;
+		return;
+	}
+	if(gbEmuGBSPlayback && pc == 0x8765)
+	{
+		cpu_action_arr = cpu_nop_arr;
 		cpu_arr_pos = 0;
 		return;
 	}
@@ -1377,42 +1393,42 @@ bool cpuCycle()
 		case CPU_SP_WRITE8_PCL_DEC_PC_FROM_00:
 			sp--;
 			memSet8(sp, pc&0xFF);
-			pc = 0x00;
+			pc = 0x00+gbsLoadAddr;
 			break;
 		case CPU_SP_WRITE8_PCL_DEC_PC_FROM_08:
 			sp--;
 			memSet8(sp, pc&0xFF);
-			pc = 0x08;
+			pc = 0x08+gbsLoadAddr;
 			break;
 		case CPU_SP_WRITE8_PCL_DEC_PC_FROM_10:
 			sp--;
 			memSet8(sp, pc&0xFF);
-			pc = 0x10;
+			pc = 0x10+gbsLoadAddr;
 			break;
 		case CPU_SP_WRITE8_PCL_DEC_PC_FROM_18:
 			sp--;
 			memSet8(sp, pc&0xFF);
-			pc = 0x18;
+			pc = 0x18+gbsLoadAddr;
 			break;
 		case CPU_SP_WRITE8_PCL_DEC_PC_FROM_20:
 			sp--;
 			memSet8(sp, pc&0xFF);
-			pc = 0x20;
+			pc = 0x20+gbsLoadAddr;
 			break;
 		case CPU_SP_WRITE8_PCL_DEC_PC_FROM_28:
 			sp--;
 			memSet8(sp, pc&0xFF);
-			pc = 0x28;
+			pc = 0x28+gbsLoadAddr;
 			break;
 		case CPU_SP_WRITE8_PCL_DEC_PC_FROM_30:
 			sp--;
 			memSet8(sp, pc&0xFF);
-			pc = 0x30;
+			pc = 0x30+gbsLoadAddr;
 			break;
 		case CPU_SP_WRITE8_PCL_DEC_PC_FROM_38:
 			sp--;
 			memSet8(sp, pc&0xFF);
-			pc = 0x38;
+			pc = 0x38+gbsLoadAddr;
 			break;
 		case CPU_SP_WRITE8_PCL_DEC_PC_FROM_40:
 			sp--;
@@ -1565,4 +1581,44 @@ bool cpuCycle()
 uint16_t cpuCurPC()
 {
 	return pc;
+}
+
+void cpuPlayGBS()
+{
+	//push back detect pc
+	sp--;
+	memSet8(sp, 0x87);
+	sp--;
+	memSet8(sp, 0x65);
+	//jump to play
+	pc = gbsPlayAddr;
+	cpu_action_arr = cpu_nop_arr;
+	cpu_arr_pos = 0;
+	//printf("Playback Start at %04x\n", pc);
+}
+extern uint8_t gbsTMA, gbsTAC;
+void cpuLoadGBS(uint8_t song)
+{
+	//full reset
+	cpuInit();
+	ppuInit();
+	apuInit();
+	inputInit();
+	memInit(false,false);
+	memSet8(0xFF06,gbsTMA);
+	memSet8(0xFF07,gbsTAC);
+	//set requested sp
+	sp = gbsSP;
+	//push back detect pc
+	sp--;
+	memSet8(sp, 0x87);
+	sp--;
+	memSet8(sp, 0x65);
+	//set song and init routine
+	a = song;
+	pc = gbsInitAddr;
+	//start getting instructions
+	cpu_action_arr = cpu_nop_arr;
+	cpu_arr_pos = 0;
+	//printf("Init Start at %04x\n", pc);
 }

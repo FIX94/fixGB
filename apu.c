@@ -52,9 +52,11 @@ static envelope_t p1Env, p2Env, noiseEnv;
 typedef struct _sweep_t {
 	bool enabled;
 	bool negative;
+	bool inNegative;
 	uint8_t period;
 	uint8_t divider;
 	uint8_t shift;
+	uint16_t pfreq;
 } sweep_t;
 
 static sweep_t p1Sweep;
@@ -133,6 +135,7 @@ void apuInit()
 	p1dacenable = false; p2dacenable = false;
 	wavdacenable = false; noisedacenable = false;
 	noiseMode1 = false;
+	soundEnabled = true;
 }
 
 extern uint32_t cpu_oam_dma;
@@ -283,30 +286,36 @@ void doEnvelopeLogic(envelope_t *env)
 					env->vol--;
 			}
 		}
-		env->divider = env->period;
+		//period 0 is actually period 8!
+		env->divider = (env->period-1)&7;
 	}
 	else
 		env->divider--;
-	//too slow on its own?
-	//env->envelope = (env->constant ? env->vol : env->decay);
 }
 
-void sweepUpdateFreq(sweep_t *sw, uint16_t *freq)
+void sweepUpdateFreq(sweep_t *sw, uint16_t *freq, bool update)
 {
+	if(!sw->enabled)
+		return;
 	//printf("%i\n", *freq);
-	uint16_t inFreq = *freq;
+	uint16_t inFreq = sw->pfreq;
 	uint16_t shiftVal = (inFreq >> sw->shift);
-	//if(sw->shift > 0)
+
+	if(sw->negative)
 	{
-		if(sw->negative)
-			inFreq -= shiftVal;
-		else
-			inFreq += shiftVal;
+		sw->inNegative = true;
+		inFreq -= shiftVal;
 	}
+	else
+		inFreq += shiftVal;
+
 	if(inFreq <= 0x7FF)
 	{
-		if(sw->enabled && sw->shift && sw->period)
+		if(sw->enabled && sw->shift && sw->period && update)
+		{
 			*freq = inFreq;
+			sw->pfreq = inFreq;
+		}
 	}
 	else
 	{
@@ -319,11 +328,12 @@ void doSweepLogic(sweep_t *sw, uint16_t *freq)
 {
 	if(sw->divider == 0)
 	{
+		//printf("Divider 0\n");
 		if(sw->period)
 		{
-			sweepUpdateFreq(sw, freq);
+			sweepUpdateFreq(sw, freq, true);
 			//gameboy checks a SECOND time after updating...
-			uint16_t inFreq = *freq;
+			uint16_t inFreq = sw->pfreq;
 			uint16_t shiftVal = (inFreq >> sw->shift);
 			if(sw->negative)
 				inFreq -= shiftVal;
@@ -335,7 +345,8 @@ void doSweepLogic(sweep_t *sw, uint16_t *freq)
 				p1enable = false;
 			}
 		}
-		sw->divider = sw->period;
+		//period 0 is actually period 8!
+		sw->divider = (sw->period-1)&7;
 	}
 	else
 		sw->divider--;
@@ -442,12 +453,8 @@ void apuSet8(uint8_t reg, uint8_t val)
 		p1Sweep.shift = val&7;
 		p1Sweep.period = (val>>4)&7;
 		p1Sweep.negative = ((val&0x8) != 0);
-		//enabled by trigger
-		if(p1Sweep.enabled)
-		{
-			p1Sweep.divider = 0;
-			sweepUpdateFreq(&p1Sweep, &freq1);
-		}
+		if(p1Sweep.inNegative && !p1Sweep.negative)
+			p1enable = false;
 	}
 	else if(reg == 0x11)
 	{
@@ -462,8 +469,6 @@ void apuSet8(uint8_t reg, uint8_t val)
 		if(!p1dacenable)
 			p1enable = false;
 		p1Env.period = val&7;
-		//if(p1Env.period==0)
-		//	p1Env.period=8;
 		p1Env.divider = p1Env.period;
 	}
 	else if(reg == 0x13)
@@ -483,15 +488,17 @@ void apuSet8(uint8_t reg, uint8_t val)
 			p1Cycle = 0;
 			//trigger used to enable/disable sweep
 			if(p1Sweep.period || p1Sweep.shift)
-			{
-			
-				p1Sweep.divider = 0;
 				p1Sweep.enabled = true;
-			}
 			else
 				p1Sweep.enabled = false;
+			//trigger also resets divider, neg mode and frequency
+			p1Sweep.inNegative = false;
+			p1Sweep.pfreq = freq1;
+			//period 0 is actually period 8!
+			p1Sweep.divider = (p1Sweep.period-1)&7;
+			//if sweep shift>0, pre-calc frequency
 			if(p1Sweep.shift)
-				sweepUpdateFreq(&p1Sweep, &freq1);
+				sweepUpdateFreq(&p1Sweep, &freq1, false);
 		}
 		//printf("P1 new freq %04x\n", freq1);
 	}
@@ -508,8 +515,6 @@ void apuSet8(uint8_t reg, uint8_t val)
 		if(!p2dacenable)
 			p2enable = false;
 		p2Env.period = val&7;
-		//if(p2Env.period==0)
-		//	p2Env.period=8;
 		p2Env.divider = p2Env.period;
 	}
 	else if(reg == 0x18)
@@ -588,8 +593,6 @@ void apuSet8(uint8_t reg, uint8_t val)
 		if(!noisedacenable)
 			noiseenable = false;
 		noiseEnv.period=val&7;
-		//if(noiseEnv.period==0)
-		//	noiseEnv.period=8;
 		noiseEnv.divider = noiseEnv.period;
 	}
 	else if(reg == 0x22)

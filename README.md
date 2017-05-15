@@ -3,6 +3,7 @@ This is still quite early in development so it cant do all that much, its essent
 If you want to check it out for some reason I do include a windows binary in the "Releases" tab, if you want to compile it go check out the "build" files.  
 You will need freeglut as well as openal-soft to compile the project, it should run on most systems since it is fairly generic C code.  
 Right now most standard GB titles using MBC1, 3 and 5 should work just fine and also save into standard .sav files.  
+You can also listen to .gbs files by dragging them in, changing tracks works by pressing left/right.    
 
 Controls right now are keyboard only and do the following:  
 Y/Z is A  
