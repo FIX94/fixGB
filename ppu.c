@@ -58,6 +58,7 @@ static uint8_t ppuOAMpos;
 static uint8_t ppuOAM2pos;
 static uint8_t ppuCgbBgPalPos;
 static uint8_t ppuCgbObjPalPos;
+static uint8_t ppuLycReg;
 static uint8_t PPU_Reg[12];
 static uint8_t PPU_CGB_BGPAL[0x40];
 static uint8_t PPU_CGB_OBJPAL[0x40];
@@ -81,6 +82,7 @@ void ppuInit()
 	ppuCgbBgPalPos = 0;
 	ppuCgbObjPalPos = 0;
 	ppuCgbBank = 0;
+	ppuLycReg = 153; //last (first) line
 	ppuFrameDone = false;
 	ppuVBlank = false;
 	ppuVBlankTriggered = false;
@@ -170,7 +172,7 @@ ppuIncreasePos:
 	{
 		ppuClock = 0;
 		PPU_Reg[4]++;
-		if(PPU_Reg[4]==PPU_Reg[5])
+		if(PPU_Reg[4]==ppuLycReg)
 		{
 			if(PPU_Reg[1]&PPU_LINEMATCH_IRQ)
 			{
@@ -246,7 +248,7 @@ uint8_t ppuGet8(uint16_t addr)
 			if(!(PPU_Reg[0] & PPU_ENABLE))
 				val = 0; //This is not all that clear anywhere...
 			else
-				val = (PPU_Reg[addr&0xF]&(~7))|(ppuMode&3)|((PPU_Reg[4]==PPU_Reg[5])?PPU_LINEMATCH:0);
+				val = (PPU_Reg[addr&0xF]&(~7))|(ppuMode&3)|((PPU_Reg[4]==ppuLycReg)?PPU_LINEMATCH:0);
 		}
 		else
 			val = PPU_Reg[addr&0xF];
@@ -307,6 +309,8 @@ void ppuSet8(uint16_t addr, uint8_t val)
 				ppuClock = 0;
 				ppuMode = 2;
 			}
+			else if(addr == 0xFF45)
+				ppuLycReg = ((val == 0 || val > 153) ? 153 : val);
 			//	printf("ppuSet8(%04x, %02x)\n",addr,val);
 		}
 	}
