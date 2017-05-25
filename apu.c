@@ -135,7 +135,9 @@ void apuInit()
 	p1dacenable = false; p2dacenable = false;
 	wavdacenable = false; noisedacenable = false;
 	noiseMode1 = false;
+	//GB Bootrom
 	soundEnabled = true;
+	APU_IO_Reg[0x25] = 0x77;
 }
 
 extern uint32_t cpu_oam_dma;

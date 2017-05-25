@@ -25,7 +25,12 @@ extern uint16_t gbsLoadAddr;
 extern uint16_t gbsInitAddr;
 extern uint16_t gbsPlayAddr;
 extern uint16_t gbsSP;
+extern uint8_t cpuTimer;
+extern bool allowCgbRegs;
 
+//used externally
+bool cpuDoStopSwitch = false;
+bool cpuCgbSpeed = false;
 void cpuSetupActionArr();
 
 static uint16_t sp, pc, cpuTmp16;
@@ -37,13 +42,14 @@ void cpuInit()
 {
 	sub_in_val=0,cpuTmp=0,cpuTmp16=0;
 	//From GB Bootrom
-	a=0x01,b=0,c=0x13,d=0,e=0xD8,f=0xB0,h=1,l=0x4D;
+	a=0x01|(allowCgbRegs<<4),b=0,c=0x13,d=0,e=0xD8,f=0xB0,h=1,l=0x4D;
 	sp = 0xFFFE; //Boot Stack Pointer
 	pc = 0x0100; //hardcoded ROM entrypoint
 	irqEnable = false;
 	cpuHaltLoop = false;
 	cpuStopLoop = false;
 	cpuHaltBug = false;
+	cpuCgbSpeed = false;
 	cpuSetupActionArr();
 }
 
@@ -583,7 +589,14 @@ void cpuDAA(uint8_t *reg)
 static void cpuSTOP(uint8_t *none)
 {
 	(void)none;
-	cpuStopLoop = true;
+	printf("CPU called STOP instruction\n");
+	if(cpuDoStopSwitch)
+	{
+		cpuSetSpeed(!cpuCgbSpeed);
+		cpuDoStopSwitch = false;
+	}
+	else
+		cpuStopLoop = true;
 	//takes up 2 instructions?
 	pc++;
 }
@@ -1087,6 +1100,7 @@ void cpuGetInstruction()
 /* Main CPU Interpreter */
 int testCounter = 0;
 int waitCycles = 0;
+bool cpuDmaHalt = false;
 
 bool cpuCycle()
 {
@@ -1096,6 +1110,8 @@ bool cpuCycle()
 		waitCycles--;
 		return true;
 	}
+	if(cpuDmaHalt)
+		return true;
 	uint8_t cpu_action, sub_instr;
 	cpu_action = cpu_action_arr[cpu_arr_pos];
 	cpu_arr_pos++;
@@ -1581,6 +1597,22 @@ bool cpuCycle()
 uint16_t cpuCurPC()
 {
 	return pc;
+}
+
+void cpuSetSpeed(bool cgb)
+{
+	if(cgb)
+	{
+		printf("CPU: CGB Speed\n");
+		cpuCgbSpeed = true;
+		cpuTimer = 2;
+	}
+	else
+	{
+		printf("CPU: DMG Speed\n");
+		cpuCgbSpeed = false;
+		cpuTimer = 4;
+	}
 }
 
 void cpuPlayGBS()

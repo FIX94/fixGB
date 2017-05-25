@@ -15,6 +15,7 @@ void memSet8(uint16_t addr, uint8_t val);
 void memSet16(uint16_t addr, uint16_t val);
 void memDumpMainMem();
 void memClockTimers();
+void memDmaClockTimers();
 void memSaveGame();
 
 uint8_t memGetCurIrqList();

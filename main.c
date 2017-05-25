@@ -26,7 +26,7 @@
 #define DEBUG_KEY 0
 #define DEBUG_LOAD_INFO 1
 
-static const char *VERSION_STRING = "fixGB Alpha v0.2";
+static const char *VERSION_STRING = "fixGB Alpha v0.3";
 
 static void gbEmuDisplayFrame(void);
 static void gbEmuMainLoop(void);
@@ -50,6 +50,8 @@ uint16_t gbsInitAddr = 0;
 uint16_t gbsPlayAddr = 0;
 uint16_t gbsSP = 0;
 uint8_t gbsTracksTotal = 0, gbsTMA = 0, gbsTAC = 0;
+uint8_t cpuTimer = 4;
+bool allowCgbRegs = false;
 
 static bool inPause = false;
 static bool inResize = false;
@@ -78,7 +80,6 @@ static const uint32_t visibleImg = VISIBLE_DOTS*VISIBLE_LINES*4;
 static uint8_t scaleFactor = 3;
 static uint32_t mainLoopRuns;
 static uint16_t mainLoopPos;
-static uint8_t cpuTimer;
 //from input.c
 extern uint8_t inValReads[8];
 
@@ -120,13 +121,13 @@ int main(int argc, char** argv)
 		}
 		if(gbsTAC&0x80)
 		{
-			printf("CPU: CGB Speed\n");
-			cpuTimer = 2;
+			cpuSetSpeed(true);
+			allowCgbRegs = true;
 		}
 		else
 		{
-			printf("CPU: DMG Speed\n");
-			cpuTimer = 4;
+			cpuSetSpeed(false);
+			allowCgbRegs = false;
 		}
 		if(tmpROM[0x10] != 0)
 			printf("Game: %.32s\n",(char*)(tmpROM+0x10));
@@ -170,8 +171,11 @@ int main(int argc, char** argv)
 			printf("Exit...\n");
 			exit(EXIT_SUCCESS);
 		}
-		//DMG Mode
-		cpuTimer = 4;
+		//CPU DMG Mode
+		cpuSetSpeed(false);
+		//Set CGB Regs allowed
+		allowCgbRegs = !!(emuGBROM[0x143]&0x80);
+		printf("CGB Regs are %sallowed\n", allowCgbRegs?"":"dis");
 		apuInitBufs();
 		cpuInit();
 		ppuInit();
@@ -266,13 +270,14 @@ bool emuSkipFrame = false;
 //static uint32_t mCycles = 0;
 //static bool emuApuDoCycle = false;
 
-static uint16_t mainClock = 1;
+static uint16_t apuClock = 1;
 static uint16_t cpuClock = 1;
 static uint16_t memClock = 1;
 //static uint16_t vrc7Clock = 1;
 
 static void gbEmuMainLoop(void)
 {
+	//do one scanline loop
 	do
 	{
 		if((!emuSkipVsync && emuRenderFrame) || nesPause)
@@ -283,19 +288,8 @@ static void gbEmuMainLoop(void)
 			audioSleep();
 			return;
 		}
-		if(cpuClock == cpuTimer)
-		{
-			//main CPU clock
-			if(!cpuCycle())
-			{
-				//memDumpMainMem();
-				exit(EXIT_SUCCESS);
-			}
-			cpuClock = 1;
-		}
-		else
-			cpuClock++;
-		if(mainClock == 4)
+		//run APU first to make sure its synced
+		if(apuClock >= 4)
 		{
 			if(!apuCycle())
 			{
@@ -305,24 +299,42 @@ static void gbEmuMainLoop(void)
 				audioSleep();
 				return;
 			}
-			if(memClock == 4)
-			{
-				memClockTimers();
-				memClock = 1;
-			}
-			else
-				memClock++;
 			//channel timer updates
 			apuLenCycle();
 			/*//mapper related irqs
 			if(mapperCycle != NULL)
 				mapperCycle();*/
 			//mCycles++;
-			mainClock = 1;
+			apuClock = 1;
 		}
 		else
-			mainClock++;
+			apuClock++;
 		apuClockTimers();
+		//run possible DMA next
+		memDmaClockTimers();
+		//run CPU (and mem clocks) next
+		if(cpuClock >= cpuTimer)
+		{
+			//main CPU clock
+			if(!cpuCycle())
+			{
+				//memDumpMainMem();
+				exit(EXIT_SUCCESS);
+			}
+			//mem clock tied to CPU clock, so
+			//double speed in CGB mode!
+			if(memClock >= 4)
+			{
+				memClockTimers();
+				memClock = 1;
+			}
+			else
+				memClock++;
+			cpuClock = 1;
+		}
+		else
+			cpuClock++;
+		//run PPU last
 		if(!ppuCycle())
 			exit(EXIT_SUCCESS);
 		if(ppuDrawDone())
@@ -332,6 +344,7 @@ static void gbEmuMainLoop(void)
 				//printf("%i\n",mCycles);
 				//mCycles = 0;
 				emuRenderFrame = true;
+				//update console stats if requested
 				#if (WINDOWS_BUILD && DEBUG_HZ)
 				emuTimesCalled++;
 				DWORD end = GetTickCount();
@@ -354,6 +367,7 @@ static void gbEmuMainLoop(void)
 	}
 	while(mainLoopPos--);
 	mainLoopPos = mainLoopRuns;
+	//update console stats if requested
 	#if (WINDOWS_BUILD && DEBUG_MAIN_CALLS)
 	emuMainTimesCalled++;
 	DWORD end = GetTickCount();

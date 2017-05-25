@@ -14,6 +14,7 @@ bool ppuDrawDone();
 uint8_t ppuGet8(uint16_t addr);
 void ppuSet8(uint16_t addr, uint8_t val);
 bool ppuInVBlank();
+bool ppuInHBlank();
 void ppuDumpMem();
 
 #endif

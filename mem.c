@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include <stdbool.h>
 #include <inttypes.h>
+#include "mem.h"
 #include "cpu.h"
 #include "ppu.h"
 #include "apu.h"
@@ -15,7 +16,7 @@
 #include "mbc.h"
 
 static uint8_t Ext_Mem[0x20000];
-static uint8_t Main_Mem[0x2000];
+static uint8_t Main_Mem[0x8000];
 static uint8_t High_Mem[0x80];
 static uint8_t gbs_prevValReads[8];
 static uint8_t memLastVal;
@@ -29,10 +30,20 @@ static uint8_t timerRegVal;
 static uint8_t timerResetVal;
 static uint8_t timerRegClock;
 static uint8_t timerRegTimer;
+static uint8_t cgbMainBank;
+static bool cgbDmaActive;
+static uint16_t cgbDmaSrc;
+static uint16_t cgbDmaDst;
+static uint8_t cgbDmaLen;
+static uint8_t memDmaClock;
+static bool cgbDmaHBlankMode;
 static bool timerRegEnable = false;
 
-extern uint8_t *emuGBROM;
 static bool emuSaveEnabled = false;
+
+//from main.c
+extern bool allowCgbRegs;
+extern uint8_t *emuGBROM;
 
 //from mbc.c
 extern uint16_t cBank;
@@ -41,6 +52,13 @@ extern uint16_t bankMask;
 extern uint16_t extMask;
 extern uint16_t extTotalMask;
 extern size_t extTotalSize;
+
+//from cpu.c
+extern bool cpuCgbSpeed;
+extern bool cpuDoStopSwitch;
+
+//from ppu.c
+extern uint8_t ppuCgbBank;
 
 extern bool extMemUsed;
 extern bool bankUsed;
@@ -202,6 +220,8 @@ bool memInit(bool romcheck, bool gbs)
 					memSetExtVal();
 					memLoadSave();
 					break;
+				case 0x0F:
+					//TODO: RTC Support
 				case 0x11:
 					printf("ROM Only (MBC3)\n");
 					mbcInit(MBC_TYPE_3);
@@ -214,6 +234,8 @@ bool memInit(bool romcheck, bool gbs)
 					memSetBankVal();
 					memSetExtVal();
 					break;
+				case 0x10:
+					//TODO: RTC Support
 				case 0x13:
 					printf("ROM and RAM (with save) (MBC3)\n");
 					mbcInit(MBC_TYPE_3);
@@ -249,7 +271,7 @@ bool memInit(bool romcheck, bool gbs)
 			}
 		}
 	}
-	memset(Main_Mem,0,0x2000);
+	memset(Main_Mem,0,0x8000);
 	memset(High_Mem,0,0x80);
 	memLastVal = 0;
 	irqEnableReg = 0;
@@ -261,6 +283,13 @@ bool memInit(bool romcheck, bool gbs)
 	timerResetVal = 0;
 	timerRegClock = 1;
 	timerRegTimer = 64; //262144 / 64 = 4096
+	cgbMainBank = 1;
+	cgbDmaActive = false;
+	cgbDmaSrc = 0;
+	cgbDmaDst = 0;
+	cgbDmaLen = 0;
+	memDmaClock = 1;
+	cgbDmaHBlankMode = false;
 	timerRegEnable = false;
 	return true;
 }
@@ -285,7 +314,17 @@ uint8_t memGet8(uint16_t addr)
 	else if(addr >= 0xA000 && addr < 0xC000 && extMemUsed)
 		val = Ext_Mem[((extBank<<13)+(addr&0x1FFF))&extTotalMask];
 	else if(addr >= 0xC000 && addr < 0xFE00)
-		val = Main_Mem[addr&0x1FFF];
+	{
+		if(!allowCgbRegs)
+			val = Main_Mem[addr&0x1FFF];
+		else
+		{
+			if(addr < 0xD000)
+				val = Main_Mem[addr&0xFFF];
+			else
+				val = Main_Mem[(cgbMainBank<<12)|(addr&0xFFF)];
+		}
+	}
 	else if(addr >= 0xFE00 && addr < 0xFEA0)
 		val = ppuGet8(addr);
 	else if(addr == 0xFF00)
@@ -305,8 +344,37 @@ uint8_t memGet8(uint16_t addr)
 	}
 	else if(addr >= 0xFF10 && addr < 0xFF40)
 		val = apuGet8(addr&0xFF);
-	else if(addr >= 0xFF40 && addr < 0xFF70)
+	else if(addr >= 0xFF40 && addr < 0xFF4C)
 		val = ppuGet8(addr);
+	else if(addr >= 0xFF4D && addr < 0xFF80)
+	{
+		if(allowCgbRegs)
+		{
+			if(addr == 0xFF4D)
+				val = (cpuDoStopSwitch | (cpuCgbSpeed<<7));
+			else if(addr == 0xFF4F)
+				val = ppuCgbBank;
+			else if(addr == 0xFF51)
+				val = cgbDmaSrc>>8;
+			else if(addr == 0xFF52)
+				val = (cgbDmaSrc&0xFF);
+			else if(addr == 0xFF53)
+				val = cgbDmaDst>>8;
+			else if(addr == 0xFF54)
+				val = (cgbDmaDst&0xFF);
+			else if(addr == 0xFF55)
+			{
+				val = cgbDmaLen-1;
+				//bit 7 = 1 means NOT active
+				if(!cgbDmaActive)
+					val |= 0x80;
+			}
+			else if(addr >= 0xFF68 && addr < 0xFF6C)
+				val = ppuGet8(addr);
+			else if(addr == 0xFF70)
+				val = cgbMainBank;
+		}
+	}
 	else if(addr >= 0xFF80 && addr < 0xFFFF)
 		val = High_Mem[addr&0x7F];
 	else if(addr == 0xFFFF)
@@ -325,7 +393,17 @@ void memSet8(uint16_t addr, uint8_t val)
 	else if(addr >= 0xA000 && addr < 0xC000 && extMemUsed)
 		Ext_Mem[((extBank<<13)+(addr&0x1FFF))&extTotalMask] = val;
 	else if(addr >= 0xC000 && addr < 0xFE00)
-		Main_Mem[addr&0x1FFF] = val;
+	{
+		if(!allowCgbRegs)
+			Main_Mem[addr&0x1FFF] = val;
+		else
+		{
+			if(addr < 0xD000)
+				Main_Mem[addr&0xFFF] = val;
+			else
+				Main_Mem[(cgbMainBank<<12)|(addr&0xFFF)] = val;
+		}
+	}
 	else if(addr >= 0xFE00 && addr < 0xFEA0)
 		ppuSet8(addr, val);
 	else if(addr == 0xFF00)
@@ -358,8 +436,49 @@ void memSet8(uint16_t addr, uint8_t val)
 	}
 	else if(addr >= 0xFF10 && addr < 0xFF40)
 		apuSet8(addr&0xFF, val);
-	else if(addr >= 0xFF40 && addr < 0xFF70)
+	else if(addr >= 0xFF40 && addr < 0xFF4C)
 		ppuSet8(addr, val);
+	else if(addr >= 0xFF4D && addr < 0xFF80)
+	{
+		if(allowCgbRegs)
+		{
+			if(addr == 0xFF4D)
+				cpuDoStopSwitch = !!(val&1);
+			else if(addr == 0xFF4F)
+				ppuCgbBank = (val&1);
+			else if(addr == 0xFF51)
+				cgbDmaSrc = (cgbDmaSrc&0x00FF)|(val<<8);
+			else if(addr == 0xFF52)
+				cgbDmaSrc = (cgbDmaSrc&0xFF00)|(val&~0xF);
+			else if(addr == 0xFF53)
+				cgbDmaDst = (cgbDmaDst&0x00FF)|(val<<8)|0x8000;
+			else if(addr == 0xFF54)
+				cgbDmaDst = (cgbDmaDst&0xFF00)|(val&~0xF);
+			else if(addr == 0xFF55)
+			{
+				//disabling ongoing HBlank DMA when disabling HBlank mode
+				if(cgbDmaActive && cgbDmaHBlankMode && !(val&0x80))
+					cgbDmaActive = false;
+				else //enable DMA in all other cases
+				{
+					cgbDmaActive = true;
+					cgbDmaLen = (val&0x7F)+1;
+					cgbDmaHBlankMode = !!(val&0x80);
+					//trigger immediately
+					memDmaClock = 16;
+					memDmaClockTimers();
+				}
+			}
+			else if(addr >= 0xFF68 && addr < 0xFF6C)
+				ppuSet8(addr,val);
+			else if(addr == 0xFF70)
+			{
+				cgbMainBank = (val&7);
+				if(cgbMainBank == 0)
+					cgbMainBank = 1;
+			}
+		}
+	}
 	else if(addr >= 0xFF80 && addr < 0xFFFF)
 		High_Mem[addr&0x7F] = val;
 	else if(addr == 0xFFFF)
@@ -398,7 +517,7 @@ void memDumpMainMem()
 	FILE *f = fopen("MainMem.bin","wb");
 	if(f)
 	{
-		fwrite(Main_Mem,1,0x2000,f);
+		fwrite(Main_Mem,1,allowCgbRegs?0x8000:0x2000,f);
 		fclose(f);
 	}
 	f = fopen("HighMem.bin","wb");
@@ -451,7 +570,7 @@ extern bool gbEmuGBSPlayback;
 extern bool gbsTimerMode;
 extern uint8_t inValReads[8];
 
-//clocked at 262144 Hz
+//clocked at 262144 Hz (or 2x that in CGB Mode)
 void memClockTimers()
 {
 	if(gbEmuGBSPlayback)
@@ -510,4 +629,38 @@ void memClockTimers()
 	}
 	else
 		timerRegClock++;
+}
+
+extern bool cpuDmaHalt;
+
+//clocked at 131072 Hz
+void memDmaClockTimers()
+{
+	if(memDmaClock >= 16)
+	{
+		cpuDmaHalt = false;
+		if(!cgbDmaActive)
+			return;
+		//printf("%04x %04x %02x\n", cgbDmaSrc, cgbDmaDst, cgbDmaLen);
+		if(cgbDmaLen && ((cgbDmaSrc < 0x8000) || (cgbDmaSrc >= 0xA000 && cgbDmaSrc < 0xE000)) && (cgbDmaDst >= 0x8000 && cgbDmaDst < 0xA000))
+		{
+			if(!cgbDmaHBlankMode || (cgbDmaHBlankMode && ppuInHBlank()))
+			{
+				uint8_t i;
+				for(i = 0; i < 0x10; i++)
+					memSet8(cgbDmaDst+i, memGet8(cgbDmaSrc+i));
+				cgbDmaLen--;
+				if(cgbDmaLen == 0)
+					cgbDmaActive = false;
+				cgbDmaSrc += 0x10;
+				cgbDmaDst += 0x10;
+				cpuDmaHalt = true;
+			}
+		}
+		else
+			cgbDmaActive = false;
+		memDmaClock = 1;
+	}
+	else
+		memDmaClock++;
 }
