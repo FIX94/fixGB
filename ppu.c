@@ -60,11 +60,12 @@ static uint8_t ppuCgbBgPalPos;
 static uint8_t ppuCgbObjPalPos;
 static uint8_t ppuLycReg;
 static uint8_t PPU_Reg[12];
-static uint8_t PPU_CGB_BGPAL[0x40];
-static uint8_t PPU_CGB_OBJPAL[0x40];
 static uint8_t PPU_OAM[0xA0];
 static uint8_t PPU_OAM2[0x28];
 static uint8_t PPU_VRAM[0x4000];
+static uint8_t PPU_CGB_BGPAL[0x40];
+static uint8_t PPU_CGB_OBJPAL[0x40];
+static uint8_t PPU_CGB_BGRLUT[0x18000];
 static bool ppuFrameDone;
 static bool ppuVBlank;
 static bool ppuVBlankTriggered;
@@ -88,13 +89,33 @@ void ppuInit()
 	ppuVBlankTriggered = false;
 	ppuHBlank = false;
 	ppuHBlankTriggered = false;
+	//set draw method depending on DMG or CGB Mode
+	ppuDrawDot = allowCgbRegs?ppuDrawDotCGB:ppuDrawDotDMG;
+	//init buffers
 	memset(PPU_Reg,0,12);
-	memset(PPU_CGB_BGPAL,0xFF,0x40);
-	memset(PPU_CGB_OBJPAL,0xFF,0x40);
 	memset(PPU_OAM,0,0xA0);
 	memset(PPU_OAM2,0,0x28);
 	memset(PPU_VRAM,0,0x4000);
-	ppuDrawDot = allowCgbRegs?ppuDrawDotCGB:ppuDrawDotDMG;
+	//set CGB palettes to white
+	memset(PPU_CGB_BGPAL,0xFF,0x40);
+	memset(PPU_CGB_OBJPAL,0xFF,0x40);
+	//generate CGB BGR32 LUT
+	uint8_t r, g, b;
+	uint32_t cgb_palpos = 0;
+	for(b = 0; b < 0x20; b++)
+	{
+		for(g = 0; g < 0x20; g++)
+		{
+			for(r = 0; r < 0x20; r++)
+			{
+				//this color mixing makes it look closer
+				//to what an actual GBC screen produces
+				PPU_CGB_BGRLUT[cgb_palpos++] = r+(g*2)+(b*5); //Blue
+				PPU_CGB_BGRLUT[cgb_palpos++] = r+(g*6)+b; //Green
+				PPU_CGB_BGRLUT[cgb_palpos++] = (r*7)+g; //Red
+			}
+		}
+	}
 	//From GB Bootrom
 	PPU_Reg[0] = 0x91;
 	PPU_Reg[7] = 0xFC;
@@ -691,7 +712,7 @@ static void ppuDrawDotCGB(size_t drawPos)
 	}
 	if(!bgHighestPrio && PPU_Reg[0]&PPU_SPRITE_ENABLE)
 		cgbRGB = ppuDoSpritesCGB(color, cgbRGB);
-	textureImage[drawPos] = ((cgbRGB>>10)&0x1F)<<3; //Blue
-	textureImage[drawPos+1] = ((cgbRGB>>5)&0x1F)<<3; //Green
-	textureImage[drawPos+2] = (cgbRGB&0x1F)<<3; //Red
+	uint32_t cgb_palpos = (cgbRGB&0x7FFF)*3;
+	//copy color value from BGR32 LUT
+	memcpy(textureImage+drawPos, PPU_CGB_BGRLUT+cgb_palpos, 3);
 }
