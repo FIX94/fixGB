@@ -26,7 +26,7 @@
 #define DEBUG_KEY 0
 #define DEBUG_LOAD_INFO 1
 
-static const char *VERSION_STRING = "fixGB Alpha v0.3.2";
+static const char *VERSION_STRING = "fixGB Alpha v0.4";
 
 static void gbEmuDisplayFrame(void);
 static void gbEmuMainLoop(void);

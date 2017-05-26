@@ -83,7 +83,7 @@ void ppuInit()
 	ppuCgbBgPalPos = 0;
 	ppuCgbObjPalPos = 0;
 	ppuCgbBank = 0;
-	ppuLycReg = 153; //last (first) line
+	ppuLycReg = 0; //first line
 	ppuFrameDone = false;
 	ppuVBlank = false;
 	ppuVBlankTriggered = false;
@@ -177,7 +177,7 @@ bool ppuCycle()
 			ppuOAMpos++;
 		}
 		//draw point?
-		if(ppuClock >= 80 && ppuClock < 240)
+		if(ppuClock >= 92 && ppuClock < 252)
 		{
 			//makes it possible to draw 160x144 in here :)
 			size_t drawPos = (ppuDots*4)+(PPU_Reg[4]*160*4);
@@ -193,7 +193,9 @@ ppuIncreasePos:
 	{
 		ppuClock = 0;
 		PPU_Reg[4]++;
-		if(PPU_Reg[4]==ppuLycReg)
+		//zelda seems to want a STAT IRQ for line 0 on the line before it which breaks
+		//other games, TODO figure out why its intro looks correct with PPU_Reg == 153
+		if((PPU_Reg[4] == ppuLycReg) || (ppuLycReg == 0 && PPU_Reg[4] == 154))
 		{
 			if(PPU_Reg[1]&PPU_LINEMATCH_IRQ)
 			{
@@ -280,12 +282,17 @@ uint8_t ppuGet8(uint16_t addr)
 	{
 		if(addr == 0xFF68)
 			val = ppuCgbBgPalPos;
-		else if(addr == 0xFF69)
-			val = PPU_CGB_BGPAL[ppuCgbBgPalPos&0x3F];
 		else if(addr == 0xFF6A)
 			val = ppuCgbObjPalPos;
-		else if(addr == 0xFF6B)
-			val = PPU_CGB_OBJPAL[ppuCgbObjPalPos&0x3F];
+		else if(!(PPU_Reg[0] & PPU_ENABLE) || (ppuMode != 3))
+		{
+			if(addr == 0xFF69)
+				val = PPU_CGB_BGPAL[ppuCgbBgPalPos&0x3F];
+			else if(addr == 0xFF6B)
+				val = PPU_CGB_OBJPAL[ppuCgbObjPalPos&0x3F];
+		}
+		else
+			val = 0xFF;
 	}
 	return val;
 }
@@ -327,33 +334,41 @@ void ppuSet8(uint16_t addr, uint8_t val)
 			if(addr == 0xFF40 && !(val&PPU_ENABLE))
 			{
 				PPU_Reg[4] = 0;
-				ppuClock = 0;
-				ppuMode = 2;
+				//since it resets a bit into the screen
+				//it wont get through OAM fully
+				ppuClock = 6;
+				ppuOAMpos = 0; //Reset check pos
+				ppuOAM2pos = 0; //Reset array pos
+				ppuMode = 2; //OAM
+				ppuHBlank = false;
 			}
 			else if(addr == 0xFF45)
-				ppuLycReg = ((val == 0 || val > 153) ? 153 : val);
-			//	printf("ppuSet8(%04x, %02x)\n",addr,val);
+				ppuLycReg = val;
+			//printf("ppuSet8(%04x, %02x)\n",addr,val);
 		}
 	}
 	else if(addr >= 0xFF68 && addr < 0xFF6C)
 	{
 		if(addr == 0xFF68)
 			ppuCgbBgPalPos = val;
-		else if(addr == 0xFF69)
-		{
-			//printf("BG Write %02x to %02x\n", val, ppuCgbBgPalPos&0x3F);
-			PPU_CGB_BGPAL[ppuCgbBgPalPos&0x3F] = val;
-			if(ppuCgbBgPalPos&0x80) //auto-increment
-				ppuCgbBgPalPos = ((ppuCgbBgPalPos+1)&0x3F)|0x80;
-		}
 		else if(addr == 0xFF6A)
 			ppuCgbObjPalPos = val;
-		else if(addr == 0xFF6B)
+		else if(!(PPU_Reg[0] & PPU_ENABLE) || (ppuMode != 3))
 		{
-			//printf("OBJ Write %02x to %02x\n", val, ppuCgbObjPalPos&0x3F);
-			PPU_CGB_OBJPAL[ppuCgbObjPalPos&0x3F] = val;
-			if(ppuCgbObjPalPos&0x80) //auto-increment
-				ppuCgbObjPalPos = ((ppuCgbObjPalPos+1)&0x3F)|0x80;
+			if(addr == 0xFF69)
+			{
+				//printf("BG Write %02x to %02x\n", val, ppuCgbBgPalPos&0x3F);
+				PPU_CGB_BGPAL[ppuCgbBgPalPos&0x3F] = val;
+				if(ppuCgbBgPalPos&0x80) //auto-increment
+					ppuCgbBgPalPos = ((ppuCgbBgPalPos+1)&0x3F)|0x80;
+			}
+			else if(addr == 0xFF6B)
+			{
+				//printf("OBJ Write %02x to %02x\n", val, ppuCgbObjPalPos&0x3F);
+				PPU_CGB_OBJPAL[ppuCgbObjPalPos&0x3F] = val;
+				if(ppuCgbObjPalPos&0x80) //auto-increment
+					ppuCgbObjPalPos = ((ppuCgbObjPalPos+1)&0x3F)|0x80;
+			}
 		}
 	}
 }
@@ -428,7 +443,6 @@ static uint8_t ppuDoSpritesDMG(uint8_t color, uint8_t tCol)
 		{
 			uint8_t cSpriteByte3 = PPU_OAM2[(i<<2)+3];
 			uint8_t tVal = PPU_OAM2[(i<<2)+2];
-			uint16_t tPos = tVal*16;
 
 			uint8_t OAMcYpos = PPU_OAM2[(i<<2)];
 			uint8_t cmpYPos = OAMcYpos-16;
@@ -439,12 +453,15 @@ static uint8_t ppuDoSpritesDMG(uint8_t color, uint8_t tCol)
 				cSpriteAdd = 16;
 				cSpriteY &= 7;
 			}
+			if(PPU_Reg[0] & PPU_SPRITE_8_16)
+				tVal &= ~1; //clear low bit since its ALL 8 by 16 (2x the space)
 			if(cSpriteByte3 & PPU_TILE_FLIP_Y)
 			{
 				cSpriteY ^= 7;
 				if(PPU_Reg[0] & PPU_SPRITE_8_16)
 					cSpriteAdd ^= 16; //8 by 16 select
 			}
+			uint16_t tPos = tVal*16;
 			tPos+=(cSpriteY)*2;
 
 			ChrRegA = PPU_VRAM[(tPos+cSpriteAdd)&0x1FFF];
@@ -578,7 +595,6 @@ static uint16_t ppuDoSpritesCGB(uint8_t color, uint16_t cgbRGB)
 			uint8_t cSpriteByte3 = PPU_OAM2[(i<<2)+3];
 			uint16_t tCgbBank = (cSpriteByte3&PPU_TILE_CGB_BANK)?0x2000:0x0;
 			uint8_t tVal = PPU_OAM2[(i<<2)+2];
-			uint16_t tPos = tVal*16;
 
 			uint8_t OAMcYpos = PPU_OAM2[(i<<2)];
 			uint8_t cmpYPos = OAMcYpos-16;
@@ -589,12 +605,15 @@ static uint16_t ppuDoSpritesCGB(uint8_t color, uint16_t cgbRGB)
 				cSpriteAdd = 16;
 				cSpriteY &= 7;
 			}
+			if(PPU_Reg[0] & PPU_SPRITE_8_16)
+				tVal &= ~1; //clear low bit since its ALL 8 by 16 (2x the space)
 			if(cSpriteByte3 & PPU_TILE_FLIP_Y)
 			{
 				cSpriteY ^= 7;
 				if(PPU_Reg[0] & PPU_SPRITE_8_16)
 					cSpriteAdd ^= 16; //8 by 16 select
 			}
+			uint16_t tPos = tVal*16;
 			tPos+=(cSpriteY)*2;
 
 			ChrRegA = PPU_VRAM[tCgbBank|((tPos+cSpriteAdd)&0x1FFF)];

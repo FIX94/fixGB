@@ -35,6 +35,10 @@ void cpuSetupActionArr();
 
 static uint16_t sp, pc, cpuTmp16;
 static uint8_t a,b,c,d,e,f,h,l,cpuTmp;
+
+//gbs stuff
+static bool gbsInitRet, gbsPlayRet;
+
 static uint8_t sub_in_val;
 static bool irqEnable;
 static bool cpuHaltLoop,cpuStopLoop,cpuHaltBug;
@@ -51,6 +55,9 @@ void cpuInit()
 	cpuHaltBug = false;
 	cpuCgbSpeed = false;
 	cpuSetupActionArr();
+	//gbs stuff
+	gbsInitRet = false; //for first init
+	gbsPlayRet = true; //for first play call
 }
 
 static void setAImmRegStats()
@@ -1062,11 +1069,27 @@ void cpuGetInstruction()
 		cpu_arr_pos = 0;
 		return;
 	}
-	if(gbEmuGBSPlayback && pc == 0x8765)
+	if(gbEmuGBSPlayback)
 	{
-		cpu_action_arr = cpu_nop_arr;
-		cpu_arr_pos = 0;
-		return;
+		//init return
+		if(pc == 0x8764)
+		{
+			//if(!gbsInitRet)
+			//	printf("Init return\n");
+			gbsInitRet = true; //allow play call
+			cpu_action_arr = cpu_nop_arr;
+			cpu_arr_pos = 0;
+			return;
+		} //play return
+		else if(pc == 0x8765)
+		{
+			//if(!gbsPlayRet)
+			//	printf("Play return\n");
+			gbsPlayRet = true; //allow next play call
+			cpu_action_arr = cpu_nop_arr;
+			cpu_arr_pos = 0;
+			return;
+		}
 	}
 	if(cpuHaltLoop)
 	{
@@ -1090,8 +1113,8 @@ void cpuGetInstruction()
 	cpu_arr_pos = 0;
 	cpu_action_func = cpu_actions_arr[curInstr];
 	
-	//if(pc>=0 && pc<0x30)
-	//	printf("%04x %02x hl %04x\n", pc, curInstr, (l|(h<<8)));
+	//if(pc==0xABC || pc == 0xAC1 || pc == 0x5E0E || pc == 0x5E0F)
+	//	printf("%04x %02x a %02x b %02x hl %04x\n", pc, curInstr, a, b, (l|(h<<8)));
 	//HALT bug: PC doesnt increase after instruction is parsed!
 	if(!cpuHaltBug) pc++;
 	cpuHaltBug = false;
@@ -1617,6 +1640,9 @@ void cpuSetSpeed(bool cgb)
 
 void cpuPlayGBS()
 {
+	if(!gbsInitRet || !gbsPlayRet)
+		return;
+	gbsPlayRet = false;
 	//push back detect pc
 	sp--;
 	memSet8(sp, 0x87);
@@ -1645,7 +1671,7 @@ void cpuLoadGBS(uint8_t song)
 	sp--;
 	memSet8(sp, 0x87);
 	sp--;
-	memSet8(sp, 0x65);
+	memSet8(sp, 0x64);
 	//set song and init routine
 	a = song;
 	pc = gbsInitAddr;

@@ -26,6 +26,7 @@ void apuLenCycle();
 typedef struct _envelope_t {
 	bool modeadd;
 	uint8_t vol;
+	uint8_t curVol;
 	uint8_t period;
 	uint8_t divider;
 } envelope_t;
