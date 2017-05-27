@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include <stdbool.h>
 #include <inttypes.h>
+#include "mem.h"
 #include "mbc.h"
 
 set8FuncT mbcSet8;
@@ -58,7 +59,6 @@ static void mbc1Set8(uint16_t addr, uint8_t val)
 			//printf("%02x\n",val);
 			cBank &= ~0x1F;
 			cBank |= val&0x1F;
-			cBank &= bankMask;
 			if((cBank&0x1F) == 0)
 				cBank |= 1;
 			cBank &= bankMask;
@@ -81,9 +81,9 @@ static void mbc1Set8(uint16_t addr, uint8_t val)
 				//printf("%02x\n",val);
 				cBank &= 0x1F;
 				cBank |= ((val&3)<<5);
-				cBank &= bankMask;
 				if((cBank&0x1F) == 0)
 					cBank |= 1;
+				cBank &= bankMask;
 			}
 		}
 	}
@@ -99,7 +99,6 @@ static void mbc3Set8(uint16_t addr, uint8_t val)
 		{
 			//printf("%02x\n",val);
 			cBank = val&0x7F;
-			cBank &= bankMask;
 			if(cBank == 0)
 				cBank |= 1;
 			cBank &= bankMask;

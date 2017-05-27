@@ -40,7 +40,7 @@ static void gbEmuHandleSpecialUp(int key, int x, int y);
 uint8_t *emuGBROM = NULL;
 char *emuSaveName = NULL;
 //used externally
-uint8_t *textureImage = NULL;
+uint32_t *textureImage = NULL;
 bool nesPause = false;
 bool ppuDebugPauseFrame = false;
 bool gbEmuGBSPlayback = false;
@@ -165,6 +165,9 @@ int main(int argc, char** argv)
 			memcpy(emuSaveName,argv[1],strlen(argv[1])+1);
 			memcpy(emuSaveName+strlen(argv[1])-2,"sav",4);
 		}
+		//Set CGB Regs allowed
+		allowCgbRegs = !!(emuGBROM[0x143]&0x80);
+		printf("CGB Regs are %sallowed\n", allowCgbRegs?"":"dis");
 		if(!memInit(true,false))
 		{
 			free(emuGBROM);
@@ -173,9 +176,6 @@ int main(int argc, char** argv)
 		}
 		//CPU DMG Mode
 		cpuSetSpeed(false);
-		//Set CGB Regs allowed
-		allowCgbRegs = !!(emuGBROM[0x143]&0x80);
-		printf("CGB Regs are %sallowed\n", allowCgbRegs?"":"dis");
 		apuInitBufs();
 		cpuInit();
 		ppuInit();
@@ -199,15 +199,6 @@ int main(int argc, char** argv)
 	#endif
 	textureImage = malloc(visibleImg);
 	memset(textureImage,0,visibleImg);
-	//make sure image is visible
-	uint32_t i;
-	for(i = 0; i < visibleImg; i+=4)
-		textureImage[i+3] = 0xFF;
-	/*cpuCycleTimer = nesPAL ? 16 : 12;
-	//do one scanline per idle loop
-	ppuCycleTimer = nesPAL ? 5 : 4;
-	mainLoopRuns = nesPAL ? DOTS*ppuCycleTimer : DOTS*ppuCycleTimer;
-	mainLoopPos = mainLoopRuns;*/
 	//do one scanline per idle loop
 	mainLoopRuns = 70224;
 	mainLoopPos = mainLoopRuns;
@@ -267,13 +258,9 @@ static void gbEmuDeinit(void)
 bool emuSkipVsync = false;
 bool emuSkipFrame = false;
 
-//static uint32_t mCycles = 0;
-//static bool emuApuDoCycle = false;
-
 static uint16_t apuClock = 1;
 static uint16_t cpuClock = 1;
 static uint16_t memClock = 1;
-//static uint16_t vrc7Clock = 1;
 
 static void gbEmuMainLoop(void)
 {
@@ -289,7 +276,7 @@ static void gbEmuMainLoop(void)
 			return;
 		}
 		//run APU first to make sure its synced
-		if(apuClock >= 4)
+		if(apuClock >= 16)
 		{
 			if(!apuCycle())
 			{
@@ -299,16 +286,11 @@ static void gbEmuMainLoop(void)
 				audioSleep();
 				return;
 			}
-			//channel timer updates
-			apuLenCycle();
-			/*//mapper related irqs
-			if(mapperCycle != NULL)
-				mapperCycle();*/
-			//mCycles++;
 			apuClock = 1;
 		}
 		else
 			apuClock++;
+		//channel timer updates
 		apuClockTimers();
 		//run possible DMA next
 		memDmaClockTimers();
@@ -341,8 +323,6 @@ static void gbEmuMainLoop(void)
 		{
 			if(!gbEmuGBSPlayback)
 			{
-				//printf("%i\n",mCycles);
-				//mCycles = 0;
 				emuRenderFrame = true;
 				//update console stats if requested
 				#if (WINDOWS_BUILD && DEBUG_HZ)

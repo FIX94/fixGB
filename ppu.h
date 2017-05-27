@@ -11,8 +11,14 @@
 void ppuInit();
 bool ppuCycle();
 bool ppuDrawDone();
-uint8_t ppuGet8(uint16_t addr);
-void ppuSet8(uint16_t addr, uint8_t val);
+uint8_t ppuGetVRAMBank8(uint16_t addr);
+uint8_t ppuGetVRAMNoBank8(uint16_t addr);
+uint8_t ppuGetOAM8(uint16_t addr);
+uint8_t ppuGetReg8(uint16_t addr);
+void ppuSetVRAMBank8(uint16_t addr, uint8_t val);
+void ppuSetVRAMNoBank8(uint16_t addr, uint8_t val);
+void ppuSetOAM8(uint16_t addr, uint8_t val);
+void ppuSetReg8(uint16_t addr, uint8_t val);
 bool ppuInVBlank();
 bool ppuInHBlank();
 void ppuDumpMem();

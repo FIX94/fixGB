@@ -18,9 +18,8 @@ void apuClockTimers();
 uint8_t *apuGetBuf();
 uint32_t apuGetBufSize();
 uint32_t apuGetFrequency();
-void apuSet8(uint8_t reg, uint8_t val);
-uint8_t apuGet8(uint8_t reg);
-void apuLenCycle();
+void apuSetReg8(uint16_t addr, uint8_t val);
+uint8_t apuGetReg8(uint16_t addr);
 
 
 typedef struct _envelope_t {

@@ -527,6 +527,8 @@ static void cpuSpDec()
 	sp--;
 }
 
+static void cpuNoAction(uint8_t *reg) { (void)reg; };
+
 static void cpuLDa(uint8_t *reg) { a = (*reg); }
 static void cpuLDb(uint8_t *reg) { b = (*reg); }
 static void cpuLDc(uint8_t *reg) { c = (*reg); }
@@ -834,10 +836,6 @@ static uint8_t cpu_add_sp_arr[2] = { CPU_SP_ACTION_ADD, CPU_GET_INSTRUCTION };
 static uint8_t cpu_ld_hl_add_sp_imm_arr[3] = { CPU_TMP_READ8_PC_INC, CPU_HL_ADD_SPECIAL, CPU_GET_INSTRUCTION };
 static uint8_t cpu_add_sp_imm_arr[4] = { CPU_TMP_READ8_PC_INC, CPU_SP_ADD_SPECIAL, CPU_DELAY_CYCLE, CPU_GET_INSTRUCTION };
 
-typedef void (*cpu_action_t)(uint8_t*);
-
-static cpu_action_t cpu_action_func;
-
 static uint8_t cpu_start_arr[1] = { CPU_GET_INSTRUCTION };
 static uint8_t *cpu_action_arr = cpu_start_arr;
 static uint8_t cpu_arr_pos = 0;
@@ -924,29 +922,31 @@ static uint8_t *cpu_instr_arr[256] = {
 	NULL, NULL, cpu_imm_pc_arr, cpu_rst38_arr, //0xFC-0xFF (0xFC=Invalid, 0xFD=Invalid)
 };
 
+typedef void (*cpu_action_t)(uint8_t*);
 static cpu_action_t cpu_actions_arr[256];
+static cpu_action_t cpu_action_func;
 
 void cpuSetupActionArr()
 {
-	cpu_actions_arr[0x00] = NULL; cpu_actions_arr[0x01] = NULL; cpu_actions_arr[0x02] = cpuSTbc; cpu_actions_arr[0x03] = cpuBcInc;
-	cpu_actions_arr[0x04] = cpuInc; cpu_actions_arr[0x05] = cpuDec; cpu_actions_arr[0x06] = NULL; cpu_actions_arr[0x07] = cpuRLCA;
-	cpu_actions_arr[0x08] = NULL; cpu_actions_arr[0x09] = NULL; cpu_actions_arr[0x0A] = cpuLDa; cpu_actions_arr[0x0B] = cpuBcDec; 
-	cpu_actions_arr[0x0C] = cpuInc; cpu_actions_arr[0x0D] = cpuDec; cpu_actions_arr[0x0E] = NULL; cpu_actions_arr[0x0F] = cpuRRCA;
+	cpu_actions_arr[0x00] = cpuNoAction; cpu_actions_arr[0x01] = cpuNoAction; cpu_actions_arr[0x02] = cpuSTbc; cpu_actions_arr[0x03] = cpuBcInc;
+	cpu_actions_arr[0x04] = cpuInc; cpu_actions_arr[0x05] = cpuDec; cpu_actions_arr[0x06] = cpuNoAction; cpu_actions_arr[0x07] = cpuRLCA;
+	cpu_actions_arr[0x08] = cpuNoAction; cpu_actions_arr[0x09] = cpuNoAction; cpu_actions_arr[0x0A] = cpuLDa; cpu_actions_arr[0x0B] = cpuBcDec; 
+	cpu_actions_arr[0x0C] = cpuInc; cpu_actions_arr[0x0D] = cpuDec; cpu_actions_arr[0x0E] = cpuNoAction; cpu_actions_arr[0x0F] = cpuRRCA;
 
-	cpu_actions_arr[0x10] = cpuSTOP; cpu_actions_arr[0x11] = NULL; cpu_actions_arr[0x12] = cpuSTde; cpu_actions_arr[0x13] = cpuDeInc;
-	cpu_actions_arr[0x14] = cpuInc; cpu_actions_arr[0x15] = cpuDec; cpu_actions_arr[0x16] = NULL; cpu_actions_arr[0x17] = cpuRLA;
-	cpu_actions_arr[0x18] = NULL; cpu_actions_arr[0x19] = NULL; cpu_actions_arr[0x1A] = cpuLDa; cpu_actions_arr[0x1B] = cpuDeDec; 
-	cpu_actions_arr[0x1C] = cpuInc; cpu_actions_arr[0x1D] = cpuDec; cpu_actions_arr[0x1E] = NULL; cpu_actions_arr[0x1F] = cpuRRA;
+	cpu_actions_arr[0x10] = cpuSTOP; cpu_actions_arr[0x11] = cpuNoAction; cpu_actions_arr[0x12] = cpuSTde; cpu_actions_arr[0x13] = cpuDeInc;
+	cpu_actions_arr[0x14] = cpuInc; cpu_actions_arr[0x15] = cpuDec; cpu_actions_arr[0x16] = cpuNoAction; cpu_actions_arr[0x17] = cpuRLA;
+	cpu_actions_arr[0x18] = cpuNoAction; cpu_actions_arr[0x19] = cpuNoAction; cpu_actions_arr[0x1A] = cpuLDa; cpu_actions_arr[0x1B] = cpuDeDec; 
+	cpu_actions_arr[0x1C] = cpuInc; cpu_actions_arr[0x1D] = cpuDec; cpu_actions_arr[0x1E] = cpuNoAction; cpu_actions_arr[0x1F] = cpuRRA;
 
-	cpu_actions_arr[0x20] = NULL; cpu_actions_arr[0x21] = NULL; cpu_actions_arr[0x22] = cpuSThlInc; cpu_actions_arr[0x23] = cpuHlInc;
-	cpu_actions_arr[0x24] = cpuInc; cpu_actions_arr[0x25] = cpuDec; cpu_actions_arr[0x26] = NULL; cpu_actions_arr[0x27] = cpuDAA;
-	cpu_actions_arr[0x28] = NULL; cpu_actions_arr[0x29] = NULL; cpu_actions_arr[0x2A] = cpuLDa; cpu_actions_arr[0x2B] = cpuHlDec; 
-	cpu_actions_arr[0x2C] = cpuInc; cpu_actions_arr[0x2D] = cpuDec; cpu_actions_arr[0x2E] = NULL; cpu_actions_arr[0x2F] = cpuCPL;
+	cpu_actions_arr[0x20] = cpuNoAction; cpu_actions_arr[0x21] = cpuNoAction; cpu_actions_arr[0x22] = cpuSThlInc; cpu_actions_arr[0x23] = cpuHlInc;
+	cpu_actions_arr[0x24] = cpuInc; cpu_actions_arr[0x25] = cpuDec; cpu_actions_arr[0x26] = cpuNoAction; cpu_actions_arr[0x27] = cpuDAA;
+	cpu_actions_arr[0x28] = cpuNoAction; cpu_actions_arr[0x29] = cpuNoAction; cpu_actions_arr[0x2A] = cpuLDa; cpu_actions_arr[0x2B] = cpuHlDec; 
+	cpu_actions_arr[0x2C] = cpuInc; cpu_actions_arr[0x2D] = cpuDec; cpu_actions_arr[0x2E] = cpuNoAction; cpu_actions_arr[0x2F] = cpuCPL;
 
-	cpu_actions_arr[0x30] = NULL; cpu_actions_arr[0x31] = NULL; cpu_actions_arr[0x32] = cpuSThlDec; cpu_actions_arr[0x33] = cpuSpInc;
-	cpu_actions_arr[0x34] = cpuInc; cpu_actions_arr[0x35] = cpuDec; cpu_actions_arr[0x36] = cpuSThl; cpu_actions_arr[0x37] = NULL;
-	cpu_actions_arr[0x38] = NULL; cpu_actions_arr[0x39] = NULL; cpu_actions_arr[0x3A] = cpuLDa; cpu_actions_arr[0x3B] = cpuSpDec; 
-	cpu_actions_arr[0x3C] = cpuInc; cpu_actions_arr[0x3D] = cpuDec; cpu_actions_arr[0x3E] = NULL; cpu_actions_arr[0x3F] = NULL;
+	cpu_actions_arr[0x30] = cpuNoAction; cpu_actions_arr[0x31] = cpuNoAction; cpu_actions_arr[0x32] = cpuSThlDec; cpu_actions_arr[0x33] = cpuSpInc;
+	cpu_actions_arr[0x34] = cpuInc; cpu_actions_arr[0x35] = cpuDec; cpu_actions_arr[0x36] = cpuSThl; cpu_actions_arr[0x37] = cpuNoAction;
+	cpu_actions_arr[0x38] = cpuNoAction; cpu_actions_arr[0x39] = cpuNoAction; cpu_actions_arr[0x3A] = cpuLDa; cpu_actions_arr[0x3B] = cpuSpDec; 
+	cpu_actions_arr[0x3C] = cpuInc; cpu_actions_arr[0x3D] = cpuDec; cpu_actions_arr[0x3E] = cpuNoAction; cpu_actions_arr[0x3F] = cpuNoAction;
 
 	cpu_actions_arr[0x40] = cpuLDb; cpu_actions_arr[0x41] = cpuLDb; cpu_actions_arr[0x42] = cpuLDb; cpu_actions_arr[0x43] = cpuLDb;
 	cpu_actions_arr[0x44] = cpuLDb; cpu_actions_arr[0x45] = cpuLDb; cpu_actions_arr[0x46] = cpuLDb; cpu_actions_arr[0x47] = cpuLDb;
@@ -988,25 +988,27 @@ void cpuSetupActionArr()
 	cpu_actions_arr[0xB8] = cpuCmp8; cpu_actions_arr[0xB9] = cpuCmp8; cpu_actions_arr[0xBA] = cpuCmp8; cpu_actions_arr[0xBB] = cpuCmp8; 
 	cpu_actions_arr[0xBC] = cpuCmp8; cpu_actions_arr[0xBD] = cpuCmp8; cpu_actions_arr[0xBE] = cpuCmp8; cpu_actions_arr[0xBF] = cpuCmp8;
 
-	cpu_actions_arr[0xC0] = NULL; cpu_actions_arr[0xC1] = NULL; cpu_actions_arr[0xC2] = NULL; cpu_actions_arr[0xC3] = NULL;
-	cpu_actions_arr[0xC4] = NULL; cpu_actions_arr[0xC5] = NULL; cpu_actions_arr[0xC6] = cpuAdd8; cpu_actions_arr[0xC7] = NULL;
-	cpu_actions_arr[0xC8] = NULL; cpu_actions_arr[0xC9] = NULL; cpu_actions_arr[0xCA] = NULL; cpu_actions_arr[0xCB] = NULL; 
-	cpu_actions_arr[0xCC] = NULL; cpu_actions_arr[0xCD] = NULL; cpu_actions_arr[0xCE] = cpuAdc8; cpu_actions_arr[0xCF] = NULL;
+	cpu_actions_arr[0xC0] = cpuNoAction; cpu_actions_arr[0xC1] = cpuNoAction; cpu_actions_arr[0xC2] = cpuNoAction; cpu_actions_arr[0xC3] = cpuNoAction;
+	cpu_actions_arr[0xC4] = cpuNoAction; cpu_actions_arr[0xC5] = cpuNoAction; cpu_actions_arr[0xC6] = cpuAdd8; cpu_actions_arr[0xC7] = cpuNoAction;
+	cpu_actions_arr[0xC8] = cpuNoAction; cpu_actions_arr[0xC9] = cpuNoAction; cpu_actions_arr[0xCA] = cpuNoAction; cpu_actions_arr[0xCB] = cpuNoAction; 
+	cpu_actions_arr[0xCC] = cpuNoAction; cpu_actions_arr[0xCD] = cpuNoAction; cpu_actions_arr[0xCE] = cpuAdc8; cpu_actions_arr[0xCF] = cpuNoAction;
 
-	cpu_actions_arr[0xD0] = NULL; cpu_actions_arr[0xD1] = NULL; cpu_actions_arr[0xD2] = NULL; cpu_actions_arr[0xD3] = NULL;
-	cpu_actions_arr[0xD4] = NULL; cpu_actions_arr[0xD5] = NULL; cpu_actions_arr[0xD6] = cpuSub8; cpu_actions_arr[0xD7] = NULL;
-	cpu_actions_arr[0xD8] = NULL; cpu_actions_arr[0xD9] = NULL; cpu_actions_arr[0xDA] = NULL; cpu_actions_arr[0xDB] = NULL; 
-	cpu_actions_arr[0xDC] = NULL; cpu_actions_arr[0xDD] = NULL; cpu_actions_arr[0xDE] = cpuSbc8; cpu_actions_arr[0xDF] = NULL;
+	cpu_actions_arr[0xD0] = cpuNoAction; cpu_actions_arr[0xD1] = cpuNoAction; cpu_actions_arr[0xD2] = cpuNoAction; cpu_actions_arr[0xD3] = cpuNoAction;
+	cpu_actions_arr[0xD4] = cpuNoAction; cpu_actions_arr[0xD5] = cpuNoAction; cpu_actions_arr[0xD6] = cpuSub8; cpu_actions_arr[0xD7] = cpuNoAction;
+	cpu_actions_arr[0xD8] = cpuNoAction; cpu_actions_arr[0xD9] = cpuNoAction; cpu_actions_arr[0xDA] = cpuNoAction; cpu_actions_arr[0xDB] = cpuNoAction; 
+	cpu_actions_arr[0xDC] = cpuNoAction; cpu_actions_arr[0xDD] = cpuNoAction; cpu_actions_arr[0xDE] = cpuSbc8; cpu_actions_arr[0xDF] = cpuNoAction;
 
-	cpu_actions_arr[0xE0] = NULL; cpu_actions_arr[0xE1] = NULL; cpu_actions_arr[0xE2] = NULL; cpu_actions_arr[0xE3] = NULL;
-	cpu_actions_arr[0xE4] = NULL; cpu_actions_arr[0xE5] = NULL; cpu_actions_arr[0xE6] = cpuAND; cpu_actions_arr[0xE7] = NULL;
-	cpu_actions_arr[0xE8] = NULL; cpu_actions_arr[0xE9] = NULL; cpu_actions_arr[0xEA] = cpuSTt16; cpu_actions_arr[0xEB] = NULL; 
-	cpu_actions_arr[0xEC] = NULL; cpu_actions_arr[0xED] = NULL; cpu_actions_arr[0xEE] = cpuXOR; cpu_actions_arr[0xEF] = NULL;
+	cpu_actions_arr[0xE0] = cpuNoAction; cpu_actions_arr[0xE1] = cpuNoAction; cpu_actions_arr[0xE2] = cpuNoAction; cpu_actions_arr[0xE3] = cpuNoAction;
+	cpu_actions_arr[0xE4] = cpuNoAction; cpu_actions_arr[0xE5] = cpuNoAction; cpu_actions_arr[0xE6] = cpuAND; cpu_actions_arr[0xE7] = cpuNoAction;
+	cpu_actions_arr[0xE8] = cpuNoAction; cpu_actions_arr[0xE9] = cpuNoAction; cpu_actions_arr[0xEA] = cpuSTt16; cpu_actions_arr[0xEB] = cpuNoAction; 
+	cpu_actions_arr[0xEC] = cpuNoAction; cpu_actions_arr[0xED] = cpuNoAction; cpu_actions_arr[0xEE] = cpuXOR; cpu_actions_arr[0xEF] = cpuNoAction;
 
-	cpu_actions_arr[0xF0] = NULL; cpu_actions_arr[0xF1] = NULL; cpu_actions_arr[0xF2] = NULL; cpu_actions_arr[0xF3] = NULL;
-	cpu_actions_arr[0xF4] = NULL; cpu_actions_arr[0xF5] = NULL; cpu_actions_arr[0xF6] = cpuOR; cpu_actions_arr[0xF7] = NULL;
-	cpu_actions_arr[0xF8] = NULL; cpu_actions_arr[0xF9] = NULL; cpu_actions_arr[0xFA] = NULL; cpu_actions_arr[0xFB] = NULL; 
-	cpu_actions_arr[0xFC] = NULL; cpu_actions_arr[0xFD] = NULL; cpu_actions_arr[0xFE] = cpuCmp8; cpu_actions_arr[0xFF] = NULL;
+	cpu_actions_arr[0xF0] = cpuNoAction; cpu_actions_arr[0xF1] = cpuNoAction; cpu_actions_arr[0xF2] = cpuNoAction; cpu_actions_arr[0xF3] = cpuNoAction;
+	cpu_actions_arr[0xF4] = cpuNoAction; cpu_actions_arr[0xF5] = cpuNoAction; cpu_actions_arr[0xF6] = cpuOR; cpu_actions_arr[0xF7] = cpuNoAction;
+	cpu_actions_arr[0xF8] = cpuNoAction; cpu_actions_arr[0xF9] = cpuNoAction; cpu_actions_arr[0xFA] = cpuNoAction; cpu_actions_arr[0xFB] = cpuNoAction; 
+	cpu_actions_arr[0xFC] = cpuNoAction; cpu_actions_arr[0xFD] = cpuNoAction; cpu_actions_arr[0xFE] = cpuCmp8; cpu_actions_arr[0xFF] = cpuNoAction;
+
+	cpu_action_func = cpuNoAction;
 }
 
 bool firstIrq = false, secondIrq = false;
@@ -1061,13 +1063,13 @@ bool cpuHandleIrqUpdates()
 	return false;
 }
 static uint8_t curInstr;
-void cpuGetInstruction()
+bool cpuGetInstruction()
 {
 	if(cpuHandleIrqUpdates())
 	{
 		cpuHaltLoop = false;
 		cpu_arr_pos = 0;
-		return;
+		return true;
 	}
 	if(gbEmuGBSPlayback)
 	{
@@ -1079,7 +1081,7 @@ void cpuGetInstruction()
 			gbsInitRet = true; //allow play call
 			cpu_action_arr = cpu_nop_arr;
 			cpu_arr_pos = 0;
-			return;
+			return true;
 		} //play return
 		else if(pc == 0x8765)
 		{
@@ -1088,7 +1090,7 @@ void cpuGetInstruction()
 			gbsPlayRet = true; //allow next play call
 			cpu_action_arr = cpu_nop_arr;
 			cpu_arr_pos = 0;
-			return;
+			return true;
 		}
 	}
 	if(cpuHaltLoop)
@@ -1098,7 +1100,7 @@ void cpuGetInstruction()
 			cpuHaltLoop = false;
 		cpu_action_arr = cpu_nop_arr;
 		cpu_arr_pos = 0;
-		return;
+		return true;
 	}
 	if(cpuStopLoop)
 	{
@@ -1106,10 +1108,15 @@ void cpuGetInstruction()
 			cpuStopLoop = false;
 		cpu_action_arr = cpu_nop_arr;
 		cpu_arr_pos = 0;
-		return;
+		return true;
 	}
 	curInstr = memGet8(pc);
 	cpu_action_arr = cpu_instr_arr[curInstr];
+	if(cpu_action_arr == NULL)
+	{
+		printf("Unsupported Instruction at %04x:%02x!\n", pc-1,curInstr);
+		return false;
+	}
 	cpu_arr_pos = 0;
 	cpu_action_func = cpu_actions_arr[curInstr];
 	
@@ -1118,33 +1125,29 @@ void cpuGetInstruction()
 	//HALT bug: PC doesnt increase after instruction is parsed!
 	if(!cpuHaltBug) pc++;
 	cpuHaltBug = false;
+
+	return true;
 }
 
 /* Main CPU Interpreter */
-int testCounter = 0;
-int waitCycles = 0;
 bool cpuDmaHalt = false;
 
 bool cpuCycle()
 {
-	testCounter++;
-	if(waitCycles)
-	{
-		waitCycles--;
-		return true;
-	}
+	bool cycleret = true;
 	if(cpuDmaHalt)
-		return true;
+		return cycleret;
 	uint8_t cpu_action, sub_instr;
 	cpu_action = cpu_action_arr[cpu_arr_pos];
 	cpu_arr_pos++;
 	switch(cpu_action)
 	{
 		case CPU_GET_INSTRUCTION:
-			cpuGetInstruction();
+			cycleret = cpuGetInstruction();
 			break;
 		case CPU_GET_SUBINSTRUCTION:
 			sub_instr = memGet8(pc++);
+			//set sub array
 			switch(sub_instr&7)
 			{
 				case 0:
@@ -1178,31 +1181,47 @@ bool cpuCycle()
 					printf("Unknown sub %02x\n", sub_instr);
 					return false;
 			}
-			if(sub_instr < 0x8)
-				cpu_action_func = cpuRLC;
-			else if(sub_instr < 0x10)
-				cpu_action_func = cpuRRC;
-			else if(sub_instr < 0x18)
-				cpu_action_func = cpuRL;
-			else if(sub_instr < 0x20)
-				cpu_action_func = cpuRR;
-			else if(sub_instr < 0x28)
-				cpu_action_func = cpuSLA;
-			else if(sub_instr < 0x30)
-				cpu_action_func = cpuSRA;
-			else if(sub_instr < 0x38)
-				cpu_action_func = cpuSWAP;
-			else if(sub_instr < 0x40)
-				cpu_action_func = cpuSRL;
-			else
+			//set sub func
+			switch(sub_instr>>3)
 			{
-				sub_in_val = ((sub_instr&0x3F)>>3)&7;
-				if(sub_instr < 0x80)
+				case 0:
+					cpu_action_func = cpuRLC;
+					break;
+				case 1:
+					cpu_action_func = cpuRRC;
+					break;
+				case 2:
+					cpu_action_func = cpuRL;
+					break;
+				case 3:
+					cpu_action_func = cpuRR;
+					break;
+				case 4:
+					cpu_action_func = cpuSLA;
+					break;
+				case 5:
+					cpu_action_func = cpuSRA;
+					break;
+				case 6:
+					cpu_action_func = cpuSWAP;
+					break;
+				case 7:
+					cpu_action_func = cpuSRL;
+					break;
+				case  8: case  9: case 10: case 11:
+				case 12: case 13: case 14: case 15:
+					sub_in_val = ((sub_instr&0x3F)>>3)&7;
 					cpu_action_func = cpuBIT;
-				else if(sub_instr < 0xC0)
+					break;
+				case 16: case 17: case 18: case 19:
+				case 20: case 21: case 22: case 23:
+					sub_in_val = ((sub_instr&0x3F)>>3)&7;
 					cpu_action_func = cpuRES;
-				else
+					break;
+				default:
+					sub_in_val = ((sub_instr&0x3F)>>3)&7;
 					cpu_action_func = cpuSET;
+					break;
 			}
 			cpu_arr_pos = 0;
 			break;
@@ -1212,76 +1231,60 @@ bool cpuCycle()
 			//printf("RETI from %04x\n", pc);
 			break;
 		case CPU_ACTION_GET_INSTRUCTION:
-			if(cpu_action_func)
-				cpu_action_func(&cpuTmp);
-			cpuGetInstruction();
+			cpu_action_func(&cpuTmp);
+			cycleret = cpuGetInstruction();
 			break;
 		case CPU_A_ACTION_GET_INSTRUCTION:
-			if(cpu_action_func)
-				cpu_action_func(&a);
-			cpuGetInstruction();
+			cpu_action_func(&a);
+			cycleret = cpuGetInstruction();
 			break;
 		case CPU_B_ACTION_GET_INSTRUCTION:
-			if(cpu_action_func)
-				cpu_action_func(&b);
-			cpuGetInstruction();
+			cpu_action_func(&b);
+			cycleret = cpuGetInstruction();
 			break;
 		case CPU_C_ACTION_GET_INSTRUCTION:
-			if(cpu_action_func)
-				cpu_action_func(&c);
-			cpuGetInstruction();
+			cpu_action_func(&c);
+			cycleret = cpuGetInstruction();
 			break;
 		case CPU_D_ACTION_GET_INSTRUCTION:
-			if(cpu_action_func)
-				cpu_action_func(&d);
-			cpuGetInstruction();
+			cpu_action_func(&d);
+			cycleret = cpuGetInstruction();
 			break;
 		case CPU_E_ACTION_GET_INSTRUCTION:
-			if(cpu_action_func)
-				cpu_action_func(&e);
-			cpuGetInstruction();
+			cpu_action_func(&e);
+			cycleret = cpuGetInstruction();
 			break;
 		case CPU_H_ACTION_GET_INSTRUCTION:
-			if(cpu_action_func)
-				cpu_action_func(&h);
-			cpuGetInstruction();
+			cpu_action_func(&h);
+			cycleret = cpuGetInstruction();
 			break;
 		case CPU_L_ACTION_GET_INSTRUCTION:
-			if(cpu_action_func)
-				cpu_action_func(&l);
-			cpuGetInstruction();
+			cpu_action_func(&l);
+			cycleret = cpuGetInstruction();
 			break;
 		case CPU_ACTION_WRITE:
-			if(cpu_action_func)
-				cpu_action_func(&cpuTmp);
+			cpu_action_func(&cpuTmp);
 			break;
 		case CPU_A_ACTION_WRITE:
-			if(cpu_action_func)
-				cpu_action_func(&a);
+			cpu_action_func(&a);
 			break;
 		case CPU_B_ACTION_WRITE:
-			if(cpu_action_func)
-				cpu_action_func(&b);
+			cpu_action_func(&b);
 			break;
 		case CPU_C_ACTION_WRITE:
-			if(cpu_action_func)
-				cpu_action_func(&c);
+			cpu_action_func(&c);
 			break;
 		case CPU_D_ACTION_WRITE:
-			if(cpu_action_func)
-				cpu_action_func(&d);
+			cpu_action_func(&d);
 			break;
 		case CPU_E_ACTION_WRITE:
-			if(cpu_action_func)
-				cpu_action_func(&e);
+			cpu_action_func(&e);
 			break;
 		case CPU_H_ACTION_WRITE:
-			if(cpu_action_func)
-				cpu_action_func(&h);
+			cpu_action_func(&h);
 			break;
 		case CPU_L_ACTION_WRITE:
-			if(cpu_action_func)
-				cpu_action_func(&l);
+			cpu_action_func(&l);
 			break;
 		case CPU_BC_ACTION_ADD:
 			cpuAdd16(c|b<<8);
@@ -1304,11 +1307,8 @@ bool cpuCycle()
 			sp = cpuAddSp16(cpuTmp);
 			break;
 		case CPU_ACTION_WRITE8_HL:
-			if(cpu_action_func)
-			{
-				cpu_action_func(&cpuTmp);
-				memSet8(l | h<<8, cpuTmp);
-			}
+			cpu_action_func(&cpuTmp);
+			memSet8(l | h<<8, cpuTmp);
 			break;
 		case CPU_TMP_ADD_PC:
 			pc += (int8_t)cpuTmp;
@@ -1353,7 +1353,6 @@ bool cpuCycle()
 			cpuTmp = memGet8(sp++);
 			break;
 		case CPU_PCL_FROM_TMP_PCH_READ8_SP_INC:
-			//if((cpuTmp | (memGet8(sp)<<8)) == 0x7FCB) printf("CPU_PCL_FROM_TMP_PCH_READ8_SP_INC Wrong set from %04x\n",pc);
 			pc = (cpuTmp | (memGet8(sp++)<<8));
 			break;
 		case CPU_C_FROM_TMP_B_READ8_SP_INC:
@@ -1426,7 +1425,6 @@ bool cpuCycle()
 		case CPU_SP_WRITE8_PCL_DEC_PC_FROM_T16:
 			sp--;
 			memSet8(sp, pc&0xFF);
-			//if(cpuTmp16 == 0x7FCB) printf("CPU_SP_WRITE8_PCL_DEC_PC_FROM_T16 Wrong set from %04x\n",pc);
 			pc = cpuTmp16;
 			break;
 		case CPU_SP_WRITE8_PCL_DEC_PC_FROM_00:
@@ -1519,7 +1517,6 @@ bool cpuCycle()
 			h = memGet8(pc++);
 			break;
 		case CPU_PCL_FROM_TMP_PCH_READ8_PC:
-			//if((cpuTmp | (memGet8(pc)<<8)) == 0x7FCB) printf("CPU_PCL_FROM_TMP_PCH_READ8_PC Wrong set from %04x\n",pc);
 			pc = (cpuTmp | (memGet8(pc)<<8));
 			break;
 		case CPU_SPL_FROM_TMP_SPH_READ8_PC_INC:
@@ -1569,31 +1566,29 @@ bool cpuCycle()
 		case CPU_DI_GET_INSTRUCTION:
 			//printf("Disabled IRQs at %04x\n", pc);
 			irqEnable = false;
-			cpuGetInstruction();
+			cycleret = cpuGetInstruction();
 			break;
 		case CPU_EI_GET_INSTRUCTION:
 			//printf("Enabled IRQs and jmp to %04x ",pc);
-			cpuGetInstruction();
+			cycleret = cpuGetInstruction();
 			//printf("%04x\n",pc);
 			irqEnable = true;
 			break;
 		case CPU_SCF_GET_INSTRUCTION:
 			f |= P_FLAG_C;
 			f &= ~(P_FLAG_H|P_FLAG_N);
-			cpuGetInstruction();
+			cycleret = cpuGetInstruction();
 			break;
 		case CPU_CCF_GET_INSTRUCTION:
 			f ^= P_FLAG_C;
 			f &= ~(P_FLAG_H|P_FLAG_N);
-			cpuGetInstruction();
+			cycleret = cpuGetInstruction();
 			break;
 		case CPU_PC_FROM_HL_GET_INSTRUCTION:
-			//if((l|(h<<8)) == 0x7FCB) printf("CPU_PC_FROM_HL_GET_INSTRUCTION Wrong set from %04x\n",pc);
 			pc = (l|(h<<8));
-			cpuGetInstruction();
+			cycleret = cpuGetInstruction();
 			break;
 		case CPU_PC_FROM_T16:
-			//if(cpuTmp16 == 0x7FCB) printf("CPU_PC_FROM_T16 Wrong set from %04x\n",pc);
 			pc = cpuTmp16;
 			break;
 		case CPU_RET_NZ_CHK:
@@ -1609,12 +1604,7 @@ bool cpuCycle()
 			if(!(f & P_FLAG_C)) cpu_arr_pos+=3;
 			break;
 	}
-	if(cpu_action_arr == NULL)
-	{
-		printf("Unsupported Instruction at %04x:%02x!\n", pc-1,curInstr);
-		return false;
-	}
-	return true;
+	return cycleret;
 }
 
 uint16_t cpuCurPC()

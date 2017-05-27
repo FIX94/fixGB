@@ -64,6 +64,25 @@ extern bool extMemUsed;
 extern bool bankUsed;
 extern bool extSelect;
 
+static get8FuncT memGet8ptr[0x10000];
+static set8FuncT memSet8ptr[0x10000];
+static uint16_t memGetAddr;
+static uint16_t memSetAddr;
+static uint8_t memGetROMBank8(uint16_t addr);
+static uint8_t memGetROMNoBank8(uint16_t addr);
+static uint8_t memGetRAMBank8(uint16_t addr);
+static uint8_t memGetRAMNoBank8(uint16_t addr);
+static uint8_t memGetExtRAM8(uint16_t addr);
+static uint8_t memGetHiRAM8(uint16_t addr);
+static uint8_t memGetGeneralReg8(uint16_t addr);
+static uint8_t memGetInvalid8(uint16_t addr);
+static void memSetRAMBank8(uint16_t addr, uint8_t val);
+static void memSetRAMNoBank8(uint16_t addr, uint8_t val);
+static void memSetExtRAM8(uint16_t addr, uint8_t val);
+static void memSetHiRAM8(uint16_t addr, uint8_t val);
+static void memSetGeneralReg8(uint16_t addr, uint8_t val);
+static void memSetInvalid8(uint16_t addr, uint8_t val);
+
 static void memLoadSave();
 
 static void memSetBankVal()
@@ -167,7 +186,7 @@ static void memSetExtVal()
 			extMask = 7;
 			break;
 		default:
-			printf("Unknwon RAM Size, allowing 8KB RAM\n");
+			printf("Unknown RAM Size, allowing 8KB RAM\n");
 			extTotalMask = 0x1FFF;
 			extMask = 1;
 			break;
@@ -291,6 +310,110 @@ bool memInit(bool romcheck, bool gbs)
 	memDmaClock = 1;
 	cgbDmaHBlankMode = false;
 	timerRegEnable = false;
+	//init memGet8 and memSet8 arrays
+	memGetAddr = 0;
+	memSetAddr = 0;
+	uint32_t addr;
+	for(addr = 0; addr < 0x10000; addr++)
+	{
+		if(addr < 0x4000) //Cartridge ROM
+		{
+			memGet8ptr[addr] = memGetROMNoBank8;
+			memSet8ptr[addr] = mbcSet8;
+		}
+		else if(addr < 0x8000) //Cartridge ROM (possibly banked)
+		{
+			memGet8ptr[addr] = bankUsed?memGetROMBank8:memGetROMNoBank8;
+			memSet8ptr[addr] = mbcSet8;
+		}
+		else if(addr < 0xA000) //PPU VRAM
+		{
+			memGet8ptr[addr] = allowCgbRegs?ppuGetVRAMBank8:ppuGetVRAMNoBank8;
+			memSet8ptr[addr] = allowCgbRegs?ppuSetVRAMBank8:ppuSetVRAMNoBank8;
+		}
+		else if(addr < 0xC000) //Cardridge RAM
+		{
+			memGet8ptr[addr] = extMemUsed?memGetExtRAM8:memGetInvalid8;
+			memSet8ptr[addr] = extMemUsed?memSetExtRAM8:memSetInvalid8;
+		}
+		else if(addr < 0xD000) //Main RAM
+		{
+			memGet8ptr[addr] = memGetRAMNoBank8;
+			memSet8ptr[addr] = memSetRAMNoBank8;
+		}
+		else if(addr < 0xE000) //Main RAM (possibly banked)
+		{
+			memGet8ptr[addr] = allowCgbRegs?memGetRAMBank8:memGetRAMNoBank8;
+			memSet8ptr[addr] = allowCgbRegs?memSetRAMBank8:memSetRAMNoBank8;
+		}
+		else if(addr < 0xF000) //Echo Main RAM
+		{
+			memGet8ptr[addr] = memGetRAMNoBank8;
+			memSet8ptr[addr] = memSetRAMNoBank8;
+		}
+		else if(addr < 0xFE00) //Echo Main RAM (possibly banked)
+		{
+			memGet8ptr[addr] = allowCgbRegs?memGetRAMBank8:memGetRAMNoBank8;
+			memSet8ptr[addr] = allowCgbRegs?memSetRAMBank8:memSetRAMNoBank8;
+		}
+		else if(addr < 0xFEA0) //PPU OAM
+		{
+			memGet8ptr[addr] = ppuGetOAM8;
+			memSet8ptr[addr] = ppuSetOAM8;
+		}
+		else if(addr < 0xFF00) //Unusable
+		{
+			memGet8ptr[addr] = memGetInvalid8;
+			memSet8ptr[addr] = memSetInvalid8;
+		}
+		else if(addr == 0xFF00) //Inputs
+		{
+			memGet8ptr[addr] = inputGet8;
+			memSet8ptr[addr] = inputSet8;
+		}
+		else if(addr < 0xFF10) //General Features
+		{
+			memGet8ptr[addr] = memGetGeneralReg8;
+			memSet8ptr[addr] = memSetGeneralReg8;
+		}
+		else if(addr < 0xFF40) //APU Regs
+		{
+			memGet8ptr[addr] = apuGetReg8;
+			memSet8ptr[addr] = apuSetReg8;
+		}
+		else if(addr < 0xFF4C) //PPU Regs
+		{
+			memGet8ptr[addr] = ppuGetReg8;
+			memSet8ptr[addr] = ppuSetReg8;
+		}
+		else if(addr < 0xFF68) //General CGB Features
+		{
+			memGet8ptr[addr] = allowCgbRegs?memGetGeneralReg8:memGetInvalid8;
+			memSet8ptr[addr] = allowCgbRegs?memSetGeneralReg8:memSetInvalid8;
+		}
+		else if(addr < 0xFF6C) //PPU CGB Regs
+		{
+			memGet8ptr[addr] = allowCgbRegs?ppuGetReg8:memGetInvalid8;
+			memSet8ptr[addr] = allowCgbRegs?ppuSetReg8:memSetInvalid8;
+		}
+		else if(addr < 0xFF80) //General CGB Features
+		{
+			memGet8ptr[addr] = allowCgbRegs?memGetGeneralReg8:memGetInvalid8;
+			memSet8ptr[addr] = allowCgbRegs?memSetGeneralReg8:memSetInvalid8;
+		}
+		else if(addr < 0xFFFF) //High RAM
+		{
+			memGet8ptr[addr] = memGetHiRAM8;
+			memSet8ptr[addr] = memSetHiRAM8;
+		}
+		else if(addr == 0xFFFF) //General Features
+		{
+			memGet8ptr[addr] = memGetGeneralReg8;
+			memSet8ptr[addr] = memSetGeneralReg8;
+		}
+		else //Should never happen
+			printf("WARNING: Address %04x uninitialized!\n", addr);
+	}
 	return true;
 }
 
@@ -299,194 +422,6 @@ void memStartGBS()
 	curGBS = 1;
 	printf("Track %i/%i         ", curGBS, gbsTracksTotal);
 	cpuLoadGBS(curGBS-1);
-}
-
-uint8_t memGet8(uint16_t addr)
-{
-	uint8_t val = memLastVal;
-	//printf("memGet8 %04x\n", addr);
-	if(addr < 0x4000)
-		val = emuGBROM[addr];
-	else if(addr < 0x8000)
-		val = bankUsed?(emuGBROM[(cBank<<14)+(addr&0x3FFF)]):emuGBROM[addr];
-	else if(addr >= 0x8000 && addr < 0xA000)
-		val = ppuGet8(addr);
-	else if(addr >= 0xA000 && addr < 0xC000 && extMemUsed)
-		val = Ext_Mem[((extBank<<13)+(addr&0x1FFF))&extTotalMask];
-	else if(addr >= 0xC000 && addr < 0xFE00)
-	{
-		if(!allowCgbRegs)
-			val = Main_Mem[addr&0x1FFF];
-		else
-		{
-			if(addr < 0xD000)
-				val = Main_Mem[addr&0xFFF];
-			else
-				val = Main_Mem[(cgbMainBank<<12)|(addr&0xFFF)];
-		}
-	}
-	else if(addr >= 0xFE00 && addr < 0xFEA0)
-		val = ppuGet8(addr);
-	else if(addr == 0xFF00)
-		val = inputGet8();
-	else if(addr == 0xFF04)
-		val = divRegVal;
-	else if(addr == 0xFF05)
-		val = timerRegVal;
-	else if(addr == 0xFF06)
-		val = timerResetVal;
-	else if(addr == 0xFF07)
-		val = timerReg;
-	else if(addr == 0xFF0F)
-	{
-		val = irqFlagsReg|0xE0;
-		//printf("memGet8 %04x %02x\n", addr, val);
-	}
-	else if(addr >= 0xFF10 && addr < 0xFF40)
-		val = apuGet8(addr&0xFF);
-	else if(addr >= 0xFF40 && addr < 0xFF4C)
-		val = ppuGet8(addr);
-	else if(addr >= 0xFF4D && addr < 0xFF80)
-	{
-		if(allowCgbRegs)
-		{
-			if(addr == 0xFF4D)
-				val = (cpuDoStopSwitch | (cpuCgbSpeed<<7));
-			else if(addr == 0xFF4F)
-				val = ppuCgbBank;
-			else if(addr == 0xFF51)
-				val = cgbDmaSrc>>8;
-			else if(addr == 0xFF52)
-				val = (cgbDmaSrc&0xFF);
-			else if(addr == 0xFF53)
-				val = cgbDmaDst>>8;
-			else if(addr == 0xFF54)
-				val = (cgbDmaDst&0xFF);
-			else if(addr == 0xFF55)
-			{
-				val = cgbDmaLen-1;
-				//bit 7 = 1 means NOT active
-				if(!cgbDmaActive)
-					val |= 0x80;
-			}
-			else if(addr >= 0xFF68 && addr < 0xFF6C)
-				val = ppuGet8(addr);
-			else if(addr == 0xFF70)
-				val = cgbMainBank;
-		}
-	}
-	else if(addr >= 0xFF80 && addr < 0xFFFF)
-		val = High_Mem[addr&0x7F];
-	else if(addr == 0xFFFF)
-		val = irqEnableReg|0xE0;
-	memLastVal = val;
-	return val;
-}
-extern uint32_t cpu_oam_dma;
-extern bool cpu_odd_cycle;
-void memSet8(uint16_t addr, uint8_t val)
-{
-	if(addr < 0x8000)
-		mbcSet8(addr, val);
-	if(addr >= 0x8000 && addr < 0xA000)
-		ppuSet8(addr, val);
-	else if(addr >= 0xA000 && addr < 0xC000 && extMemUsed)
-		Ext_Mem[((extBank<<13)+(addr&0x1FFF))&extTotalMask] = val;
-	else if(addr >= 0xC000 && addr < 0xFE00)
-	{
-		if(!allowCgbRegs)
-			Main_Mem[addr&0x1FFF] = val;
-		else
-		{
-			if(addr < 0xD000)
-				Main_Mem[addr&0xFFF] = val;
-			else
-				Main_Mem[(cgbMainBank<<12)|(addr&0xFFF)] = val;
-		}
-	}
-	else if(addr >= 0xFE00 && addr < 0xFEA0)
-		ppuSet8(addr, val);
-	else if(addr == 0xFF00)
-		inputSet8(val);
-	else if(addr == 0xFF04)
-		divRegVal = 0; //writing any val resets to 0
-	else if(addr == 0xFF05)
-		timerRegVal = val;
-	else if(addr == 0xFF06)
-		timerResetVal = val;
-	else if(addr == 0xFF07)
-	{
-		//if(val != 0)
-		//	printf("memSet8 %04x %02x\n", addr, val);
-		timerReg = val; //for readback
-		timerRegEnable = ((val&4)!=0);
-		if((val&3)==0) //0 for 4096 Hz
-			timerRegTimer = 64; //262144 / 64 = 4096
-		else if((val&3)==1) //1 for 262144 Hz
-			timerRegTimer = 1; //262144 / 1 = 262144
-		else if((val&3)==2) //2 for 65536 Hz
-			timerRegTimer = 4; //262144 / 4 = 65536
-		else if((val&3)==3) //3 for 16384 Hz
-			timerRegTimer = 16; //262144 / 16 = 16384
-	}
-	else if(addr == 0xFF0F)
-	{
-		//printf("memSet8 %04x %02x\n", addr, val);
-		irqFlagsReg = val&0x1F;
-	}
-	else if(addr >= 0xFF10 && addr < 0xFF40)
-		apuSet8(addr&0xFF, val);
-	else if(addr >= 0xFF40 && addr < 0xFF4C)
-		ppuSet8(addr, val);
-	else if(addr >= 0xFF4D && addr < 0xFF80)
-	{
-		if(allowCgbRegs)
-		{
-			if(addr == 0xFF4D)
-				cpuDoStopSwitch = !!(val&1);
-			else if(addr == 0xFF4F)
-				ppuCgbBank = (val&1);
-			else if(addr == 0xFF51)
-				cgbDmaSrc = (cgbDmaSrc&0x00FF)|(val<<8);
-			else if(addr == 0xFF52)
-				cgbDmaSrc = (cgbDmaSrc&0xFF00)|(val&~0xF);
-			else if(addr == 0xFF53)
-				cgbDmaDst = (cgbDmaDst&0x00FF)|(val<<8)|0x8000;
-			else if(addr == 0xFF54)
-				cgbDmaDst = (cgbDmaDst&0xFF00)|(val&~0xF);
-			else if(addr == 0xFF55)
-			{
-				//disabling ongoing HBlank DMA when disabling HBlank mode
-				if(cgbDmaActive && cgbDmaHBlankMode && !(val&0x80))
-					cgbDmaActive = false;
-				else //enable DMA in all other cases
-				{
-					cgbDmaActive = true;
-					cgbDmaLen = (val&0x7F)+1;
-					cgbDmaHBlankMode = !!(val&0x80);
-					//trigger immediately
-					memDmaClock = 16;
-					memDmaClockTimers();
-				}
-			}
-			else if(addr >= 0xFF68 && addr < 0xFF6C)
-				ppuSet8(addr,val);
-			else if(addr == 0xFF70)
-			{
-				cgbMainBank = (val&7);
-				if(cgbMainBank == 0)
-					cgbMainBank = 1;
-			}
-		}
-	}
-	else if(addr >= 0xFF80 && addr < 0xFFFF)
-		High_Mem[addr&0x7F] = val;
-	else if(addr == 0xFFFF)
-	{
-		//printf("memSet8 %04x %02x\n", addr, val);
-		irqEnableReg = val&0x1F;
-	}
-	memLastVal = val;
 }
 
 uint8_t memGetCurIrqList()
@@ -507,6 +442,195 @@ void memEnableVBlankIrq()
 void memEnableStatIrq()
 {
 	irqFlagsReg |= 2;
+}
+
+uint8_t memGet8(uint16_t addr)
+{
+	return memGet8ptr[addr](addr);
+}
+
+static uint8_t memGetROMBank8(uint16_t addr)
+{
+	return emuGBROM[(cBank<<14)+(addr&0x3FFF)];
+}
+
+static uint8_t memGetROMNoBank8(uint16_t addr)
+{
+	return emuGBROM[addr&0x7FFF];
+}
+
+static uint8_t memGetRAMBank8(uint16_t addr)
+{
+	return Main_Mem[(cgbMainBank<<12)|(addr&0xFFF)];
+}
+
+static uint8_t memGetRAMNoBank8(uint16_t addr)
+{
+	return Main_Mem[addr&0x1FFF];
+}
+
+static uint8_t memGetExtRAM8(uint16_t addr)
+{
+	return Ext_Mem[((extBank<<13)+(addr&0x1FFF))&extTotalMask];
+}
+
+static uint8_t memGetHiRAM8(uint16_t addr)
+{
+	return High_Mem[addr&0x7F];
+}
+
+static uint8_t memGetGeneralReg8(uint16_t addr)
+{
+	switch(addr&0xFF)
+	{
+		case 0x04:
+			return divRegVal;
+		case 0x05:
+			return timerRegVal;
+		case 0x06:
+			return timerResetVal;
+		case 0x07:
+			return timerReg;
+		case 0x0F:
+			return irqFlagsReg|0xE0;
+		case 0x4D:
+			return (cpuDoStopSwitch | (cpuCgbSpeed<<7));
+		case 0x4F:
+			return ppuCgbBank;
+		case 0x51:
+			return cgbDmaSrc>>8;
+		case 0x52:
+			return (cgbDmaSrc&0xFF);
+		case 0x53:
+			return (cgbDmaDst>>8)&0x1F;
+		case 0x54:
+			return (cgbDmaDst&0xFF);
+		case 0x55:
+			//bit 7 = 1 means NOT active
+			if(!cgbDmaActive)
+				return (0x80|(cgbDmaLen-1));
+			else
+				return cgbDmaLen-1;
+		case 0x70:
+			return cgbMainBank;
+		case 0xFF:
+			return irqEnableReg|0xE0;
+		default:
+			break;
+	}
+	return 0xFF;
+}
+
+static uint8_t memGetInvalid8(uint16_t addr)
+{
+	(void)addr;
+	return 0xFF;
+}
+
+void memSet8(uint16_t addr, uint8_t val)
+{
+	memSet8ptr[addr](addr,val);
+}
+
+static void memSetRAMBank8(uint16_t addr, uint8_t val)
+{
+	Main_Mem[(cgbMainBank<<12)|(addr&0xFFF)] = val;
+}
+
+static void memSetRAMNoBank8(uint16_t addr, uint8_t val)
+{
+	Main_Mem[addr&0x1FFF] = val;
+}
+
+static void memSetExtRAM8(uint16_t addr, uint8_t val)
+{
+	Ext_Mem[((extBank<<13)+(addr&0x1FFF))&extTotalMask] = val;
+}
+
+static void memSetHiRAM8(uint16_t addr, uint8_t val)
+{
+	High_Mem[addr&0x7F] = val;
+}
+
+static void memSetGeneralReg8(uint16_t addr, uint8_t val)
+{
+	switch(addr&0xFF)
+	{
+		case 0x04:
+			divRegVal = 0; //writing any val resets to 0
+			break;
+		case 0x05:
+			timerRegVal = val;
+			break;
+		case 0x06:
+			timerResetVal = val;
+			break;
+		case 0x07:
+			//if(val != 0)
+			//	printf("memSet8 %04x %02x\n", addr, val);
+			timerReg = val; //for readback
+			timerRegEnable = ((val&4)!=0);
+			if((val&3)==0) //0 for 4096 Hz
+				timerRegTimer = 64; //262144 / 64 = 4096
+			else if((val&3)==1) //1 for 262144 Hz
+				timerRegTimer = 1; //262144 / 1 = 262144
+			else if((val&3)==2) //2 for 65536 Hz
+				timerRegTimer = 4; //262144 / 4 = 65536
+			else if((val&3)==3) //3 for 16384 Hz
+				timerRegTimer = 16; //262144 / 16 = 16384
+			break;
+		case 0x0F:
+			irqFlagsReg = val&0x1F;
+			break;
+		case 0x4D:
+			cpuDoStopSwitch = !!(val&1);
+			break;
+		case 0x4F:
+			ppuCgbBank = (val&1);
+			break;
+		case 0x51:
+			cgbDmaSrc = (cgbDmaSrc&0x00FF)|(val<<8);
+			break;
+		case 0x52:
+			cgbDmaSrc = (cgbDmaSrc&0xFF00)|(val&~0xF);
+			break;
+		case 0x53:
+			cgbDmaDst = (cgbDmaDst&0x00FF)|((val&0x1F)<<8)|0x8000;
+			break;
+		case 0x54:
+			cgbDmaDst = (cgbDmaDst&0xFF00)|(val&~0xF);
+			break;
+		case 0x55:
+			//disabling ongoing HBlank DMA when disabling HBlank mode
+			if(cgbDmaActive && cgbDmaHBlankMode && !(val&0x80))
+				cgbDmaActive = false;
+			else //enable DMA in all other cases
+			{
+				cgbDmaActive = true;
+				cgbDmaLen = (val&0x7F)+1;
+				cgbDmaHBlankMode = !!(val&0x80);
+				//trigger immediately
+				memDmaClock = 16;
+				memDmaClockTimers();
+			}
+			break;
+		case 0x70:
+			cgbMainBank = (val&7);
+			if(cgbMainBank == 0)
+				cgbMainBank = 1;
+			break;
+		case 0xFF:
+			irqEnableReg = val&0x1F;
+			break;
+		default:
+			break;
+	}
+}
+
+static void memSetInvalid8(uint16_t addr, uint8_t val)
+{
+	(void)addr;
+	(void)val;
 }
 
 #define DEBUG_MEM_DUMP 0

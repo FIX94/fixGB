@@ -21,16 +21,18 @@ void inputInit()
 	memset(inValReads, 0, 8);
 }
 
-void inputSet8(uint8_t in)
+void inputSet8(uint16_t addr, uint8_t in)
 {
+	(void)addr;
 	modeSelect = ((~in)>>4)&0x3;
 	#if DEBUG_INPUT
 	printf("Set %02x->%02x\n",in,modeSelect);
 	#endif
 }
 
-uint8_t inputGet8()
+uint8_t inputGet8(uint16_t addr)
 {
+	(void)addr;
 	uint8_t outVal = 0;
 	if(modeSelect == 2)
 	{

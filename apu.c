@@ -98,7 +98,7 @@ void apuInitBufs()
 	//effective frequency for 60.000Hz Video out
 	//apuFrequency = 526680;
 	//effective frequency for original LCD Video out
-	apuFrequency = 524288;
+	apuFrequency = 262144;
 	double dt = 1.0/((double)apuFrequency);
 	//LP at 22kHz
 	double rc = 1.0/(M_2_PI * 22000.0);
@@ -138,7 +138,7 @@ void apuInit()
 	wavLinearCtr = 0;
 	p1freqCtr = 0; p2freqCtr = 0; wavFreqCtr = 0, noiseFreqCtr = 0;
 	p1Cycle = 0; p2Cycle = 0; wavCycle = 0;
-	wavVolShift = 0;
+	wavVolShift = 4; //default
 
 	memset(&p1Env,0,sizeof(envelope_t));
 	memset(&p2Env,0,sizeof(envelope_t));
@@ -158,56 +158,8 @@ void apuInit()
 	APU_IO_Reg[0x25] = 0x77;
 }
 
-extern uint32_t cpu_oam_dma;
-void apuClockTimers()
-{
-	if(p1freqCtr == 0)
-	{
-		if(freq1)
-			p1freqCtr = (2048-freq1)*4;
-		p1Cycle++;
-		if(p1Cycle >= 8)
-			p1Cycle = 0;
-	}
-	if(p1freqCtr)
-		p1freqCtr--;
-
-	if(p2freqCtr == 0)
-	{
-		if(freq2)
-			p2freqCtr = (2048-freq2)*4;
-		p2Cycle++;
-		if(p2Cycle >= 8)
-			p2Cycle = 0;
-	}
-	if(p2freqCtr)
-		p2freqCtr--;
-
-	if(wavFreqCtr == 0)
-	{
-		wavFreqCtr = (2048-wavFreq)*2;
-		wavCycle++;
-		if(wavCycle >= 32)
-			wavCycle = 0;
-	}
-	if(wavFreqCtr)
-		wavFreqCtr--;
-
-	if(noiseFreqCtr == 0)
-	{
-		noiseFreqCtr = noiseFreq;
-		uint8_t cmpBit = noiseMode1 ? (noiseShiftReg>>6)&1 : (noiseShiftReg>>1)&1;
-		uint8_t cmpRes = (noiseShiftReg&1)^cmpBit;
-		noiseShiftReg >>= 1;
-		noiseShiftReg |= cmpRes<<14;
-	}
-	if(noiseFreqCtr)
-		noiseFreqCtr--;
-}
-
 static float lastHPOut[2] = { 0, 0 }, lastLPOut[2] = { 0, 0 };
 static uint8_t lastP1Out[2] = { 0, 0 }, lastP2Out[2] = { 0, 0 }, lastwavOut[2] = { 0, 0 }, lastNoiseOut[2] = { 0, 0 };
-static uint8_t apuCurChan = 0;
 extern bool emuSkipVsync, emuSkipFrame;
 
 bool apuCycle()
@@ -236,56 +188,56 @@ bool apuCycle()
 		}
 		curBufPos = 0;
 	}
-
-	uint8_t p1Out = lastP1Out[apuCurChan], p2Out = lastP2Out[apuCurChan], 
-		wavOut = lastwavOut[apuCurChan], noiseOut = lastNoiseOut[apuCurChan];
-	uint8_t apuEnableReg = (apuCurChan==0)?(APU_IO_Reg[0x25]>>4):(APU_IO_Reg[0x25]&0xF);
-	if(p1enable && p1dacenable && (apuEnableReg & P1_ENABLE))
+	uint8_t apuCurChan;
+	for(apuCurChan = 0; apuCurChan < 2; apuCurChan++)
 	{
-		if(p1seq[p1Cycle] && freq1 > 0 && freq1 <= 0x7FF)
-			lastP1Out[apuCurChan] = p1Out = p1Env.curVol;
-		else
-			p1Out = 0;
+		uint8_t p1Out = lastP1Out[apuCurChan], p2Out = lastP2Out[apuCurChan], 
+			wavOut = lastwavOut[apuCurChan], noiseOut = lastNoiseOut[apuCurChan];
+		uint8_t apuEnableReg = (apuCurChan==0)?(APU_IO_Reg[0x25]>>4):(APU_IO_Reg[0x25]&0xF);
+		if(p1enable && p1dacenable && (apuEnableReg & P1_ENABLE))
+		{
+			if(p1seq[p1Cycle] && freq1 > 0 && freq1 <= 0x7FF)
+				lastP1Out[apuCurChan] = p1Out = p1Env.curVol;
+			else
+				p1Out = 0;
+		}
+		if(p2enable && p2dacenable && (apuEnableReg & P2_ENABLE))
+		{
+			if(p2seq[p2Cycle] && freq2 > 0 && freq2 <= 0x7FF)
+				lastP2Out[apuCurChan] = p2Out = p2Env.curVol;
+			else
+				p2Out = 0;
+		}
+		if(wavenable && wavdacenable && (apuEnableReg & WAV_ENABLE))
+		{
+			uint8_t v = APU_IO_Reg[0x30+(wavCycle>>1)];
+			if((wavCycle&1)==0)
+				v >>= 4; 
+			else
+				v &= 0xF;
+			v>>=wavVolShift;
+			if(v)// && wavFreq >= 2)
+				lastwavOut[apuCurChan] = wavOut = v;
+			else
+				wavOut = 0;
+		}
+		if(noiseenable && noisedacenable && (apuEnableReg & NOISE_ENABLE))
+		{
+			if((noiseShiftReg&1) == 0 && noiseFreq > 0)
+				lastNoiseOut[apuCurChan] = noiseOut = noiseEnv.curVol;
+			else
+				noiseOut = 0;
+		}
+		//should be 60.f at max but that'd be way too quiet after LP and HP
+		float curIn = ((float)(p1Out + p2Out + wavOut + noiseOut))/45.f;
+		float curLPout = lastLPOut[apuCurChan]+(lpVal*(curIn-lastLPOut[apuCurChan]));
+		float curHPOut = hpVal*(lastHPOut[apuCurChan]+curLPout-curIn);
+		//set output
+		apuOutBuf[curBufPos] = soundEnabled?(-curHPOut):0;
+		lastLPOut[apuCurChan] = curLPout;
+		lastHPOut[apuCurChan] = curHPOut;
+		curBufPos++;
 	}
-	if(p2enable && p2dacenable && (apuEnableReg & P2_ENABLE))
-	{
-		if(p2seq[p2Cycle] && freq2 > 0 && freq2 <= 0x7FF)
-			lastP2Out[apuCurChan] = p2Out = p2Env.curVol;
-		else
-			p2Out = 0;
-	}
-	if(wavenable && wavdacenable && (apuEnableReg & WAV_ENABLE))
-	{
-		uint8_t v = APU_IO_Reg[0x30+(wavCycle>>1)];
-		if((wavCycle&1)==0)
-			v >>= 4; 
-		else
-			v &= 0xF;
-		v>>=wavVolShift;
-		if(v)// && wavFreq >= 2)
-			lastwavOut[apuCurChan] = wavOut = v;
-		else
-			wavOut = 0;
-	}
-	if(noiseenable && noisedacenable && (apuEnableReg & NOISE_ENABLE))
-	{
-		if((noiseShiftReg&1) == 0 && noiseFreq > 0)
-			lastNoiseOut[apuCurChan] = noiseOut = noiseEnv.curVol;
-		else
-			noiseOut = 0;
-	}
-	//should be 60.f at max but that'd be a tad too loud after LP and HP
-	float curIn = ((float)(p1Out + p2Out + wavOut + noiseOut))/90.f;
-	float curLPout = lastLPOut[apuCurChan]+(lpVal*(curIn-lastLPOut[apuCurChan]));
-	float curHPOut = hpVal*(lastHPOut[apuCurChan]+curLPout-curIn);
-	//set output
-	apuOutBuf[curBufPos] = soundEnabled?(-curHPOut):0;
-	lastLPOut[apuCurChan] = curLPout;
-	lastHPOut[apuCurChan] = curHPOut;
-	curBufPos++;
-
-	apuCurChan^=1;
-
 	return true;
 }
 
@@ -411,12 +363,8 @@ void apuClockB()
 		doEnvelopeLogic(&noiseEnv);
 }
 
-//extern bool apu_interrupt;
-
-void apuLenCycle()
+void apuClockTimers()
 {
-	if(modeCurCtr)
-		modeCurCtr--;
 	if(modeCurCtr == 0)
 	{
 		modePos++;
@@ -433,12 +381,58 @@ void apuLenCycle()
 			apuClockB();
 			modePos = 0;
 		}
-		modeCurCtr = 2048;
+		modeCurCtr = 8192;
 	}
+	if(modeCurCtr)
+		modeCurCtr--;
+
+	if(p1freqCtr == 0)
+	{
+		if(freq1)
+			p1freqCtr = (2048-freq1)*4;
+		p1Cycle++;
+		if(p1Cycle >= 8)
+			p1Cycle = 0;
+	}
+	if(p1freqCtr)
+		p1freqCtr--;
+
+	if(p2freqCtr == 0)
+	{
+		if(freq2)
+			p2freqCtr = (2048-freq2)*4;
+		p2Cycle++;
+		if(p2Cycle >= 8)
+			p2Cycle = 0;
+	}
+	if(p2freqCtr)
+		p2freqCtr--;
+
+	if(wavFreqCtr == 0)
+	{
+		wavFreqCtr = (2048-wavFreq)*2;
+		wavCycle++;
+		if(wavCycle >= 32)
+			wavCycle = 0;
+	}
+	if(wavFreqCtr)
+		wavFreqCtr--;
+
+	if(noiseFreqCtr == 0)
+	{
+		noiseFreqCtr = noiseFreq;
+		uint8_t cmpBit = noiseMode1 ? (noiseShiftReg>>6)&1 : (noiseShiftReg>>1)&1;
+		uint8_t cmpRes = (noiseShiftReg&1)^cmpBit;
+		noiseShiftReg >>= 1;
+		noiseShiftReg |= cmpRes<<14;
+	}
+	if(noiseFreqCtr)
+		noiseFreqCtr--;
 }
 
-void apuSet8(uint8_t reg, uint8_t val)
+void apuSetReg8(uint16_t addr, uint8_t val)
 {
+	uint8_t reg = addr&0xFF;
 	//printf("APU set %02x %02x\n", reg, val);
 	if(reg == 0x26)
 	{
@@ -461,12 +455,19 @@ void apuSet8(uint8_t reg, uint8_t val)
 			p1dacenable = false; p2dacenable = false;
 			wavdacenable = false; noisedacenable = false;
 			freq1 = 0; freq2 = 0; wavFreq = 0; noiseFreq = 0;
-		} //on sound powerup, reset frame sequencer
-		else if(!wasEnabled)
-		{
-			modeCurCtr = 2048;
-			modePos = 0;
+			wavVolShift = 4; //default
 		}
+		else
+		{
+			APU_IO_Reg[0x26] = val;
+			//on sound powerup, reset frame sequencer
+			if(!wasEnabled)
+			{
+				modeCurCtr = 8192;
+				modePos = 0;
+			}
+		}
+		return;
 	}
 	//even if sound off, still update wav buffer
 	else if(reg >= 0x30 && reg < 0x40)
@@ -477,267 +478,259 @@ void apuSet8(uint8_t reg, uint8_t val)
 			APU_IO_Reg[reg] = val;
 		return;
 	}
-	if(!soundEnabled)
+	//dont even bother with the switch if sound is off
+	else if(!soundEnabled)
 		return;
+	bool p1prevhaltloop, p2prevhaltloop,
+		wavprevhaltloop, noiseprevhaltloop;
 	APU_IO_Reg[reg] = val;
-	if(reg == 0x10)
+	switch(reg)
 	{
-		//printf("P1 sweep %02x\n", val);
-		p1Sweep.shift = val&7;
-		p1Sweep.period = (val>>4)&7;
-		p1Sweep.negative = ((val&0x8) != 0);
-		if(p1Sweep.inNegative && !p1Sweep.negative)
-			p1enable = false;
-	}
-	else if(reg == 0x11)
-	{
-		p1seq = pulseSeqs[val>>6];
-		p1LengthCtr = 64-(val&0x3F);
-	}
-	else if(reg == 0x12)
-	{
-		p1Env.vol = (val>>4)&0xF;
-		p1Env.curVol = p1Env.vol;
-		p1Env.modeadd = (val&8)!=0;
-		p1dacenable = (p1Env.modeadd || p1Env.vol);
-		if(!p1dacenable)
-			p1enable = false;
-		p1Env.period = val&7;
-	}
-	else if(reg == 0x13)
-	{
-		freq1 = ((freq1&~0xFF) | val);
-	}
-	else if(reg == 0x14)
-	{
-		bool p1prevhaltloop = p1haltloop;
-		p1haltloop = ((val&(1<<6)) == 0);
-		freq1 = (freq1&0xFF) | ((val&7)<<8);
-		//if length was previously frozen and we are in
-		//an odd frame sequence, clock length right now
-		if(p1prevhaltloop && !p1haltloop && p1LengthCtr && (modePos&1))
-		{
-			p1LengthCtr--;
-			//disable channel immediately if length
-			//reached 0 from this extra clock
-			if(p1LengthCtr == 0)
+		case 0x10:
+			//printf("P1 sweep %02x\n", val);
+			p1Sweep.shift = val&7;
+			p1Sweep.period = (val>>4)&7;
+			p1Sweep.negative = ((val&0x8) != 0);
+			if(p1Sweep.inNegative && !p1Sweep.negative)
 				p1enable = false;
-		}
-		if(val&(1<<7))
-		{
-			if(p1dacenable)
-				p1enable = true;
-			if(p1LengthCtr == 0)
-			{
-				p1LengthCtr = 64;
-				//if length enabled and we are in an odd frame
-				//sequence, subtract one from newly set clock length
-				if(!p1haltloop && (modePos&1))
-					p1LengthCtr--;
-			}
-			//trigger reloads frequency timers
-			p1Cycle = 0;
-			if(freq1)
-				p1freqCtr = (2048-freq1)*4;
-			//trigger resets env volume
+			break;
+		case 0x11:
+			p1seq = pulseSeqs[val>>6];
+			p1LengthCtr = 64-(val&0x3F);
+			break;
+		case 0x12:
+			p1Env.vol = (val>>4)&0xF;
 			p1Env.curVol = p1Env.vol;
-			//period 0 is actually period 8!
-			p1Env.divider = (p1Env.period-1)&7;
-			//trigger used to enable/disable sweep
-			if(p1Sweep.period || p1Sweep.shift)
-				p1Sweep.enabled = true;
-			else
-				p1Sweep.enabled = false;
-			//trigger also resets divider, neg mode and frequency
-			p1Sweep.inNegative = false;
-			p1Sweep.pfreq = freq1;
-			//period 0 is actually period 8!
-			p1Sweep.divider = (p1Sweep.period-1)&7;
-			//if sweep shift>0, pre-calc frequency
-			if(p1Sweep.shift)
-				sweepUpdateFreq(&p1Sweep, &freq1, false);
-		}
-		//printf("P1 new freq %04x\n", freq1);
-	}
-	else if(reg == 0x16)
-	{
-		p2seq = pulseSeqs[val>>6];
-		p2LengthCtr = 64-(val&0x3F);
-	}
-	else if(reg == 0x17)
-	{
-		p2Env.vol = (val>>4)&0xF;
-		p2Env.curVol = p2Env.vol;
-		p2Env.modeadd = (val&8)!=0;
-		p2dacenable = (p2Env.modeadd || p2Env.vol);
-		if(!p2dacenable)
-			p2enable = false;
-		p2Env.period = val&7;
-	}
-	else if(reg == 0x18)
-	{
-		freq2 = ((freq2&~0xFF) | val);
-	}
-	else if(reg == 0x19)
-	{
-		bool p2prevhaltloop = p2haltloop;
-		p2haltloop = ((val&(1<<6)) == 0);
-		freq2 = (freq2&0xFF) | ((val&7)<<8);
-		//if length was previously frozen and we are in
-		//an odd frame sequence, clock length right now
-		if(p2prevhaltloop && !p2haltloop && p2LengthCtr && (modePos&1))
-		{
-			p2LengthCtr--;
-			//disable channel immediately if length
-			//reached 0 from this extra clock
-			if(p2LengthCtr == 0)
-				p2enable = false;
-		}
-		if(val&(1<<7))
-		{
-			if(p2dacenable)
-				p2enable = true;
-			if(p2LengthCtr == 0)
+			p1Env.modeadd = (val&8)!=0;
+			p1dacenable = (p1Env.modeadd || p1Env.vol);
+			if(!p1dacenable)
+				p1enable = false;
+			p1Env.period = val&7;
+			break;
+		case 0x13:
+			freq1 = ((freq1&~0xFF) | val);
+			break;
+		case 0x14:
+			p1prevhaltloop = p1haltloop;
+			p1haltloop = ((val&(1<<6)) == 0);
+			freq1 = (freq1&0xFF) | ((val&7)<<8);
+			//if length was previously frozen and we are in
+			//an odd frame sequence, clock length right now
+			if(p1prevhaltloop && !p1haltloop && p1LengthCtr && (modePos&1))
 			{
-				p2LengthCtr = 64;
-				//if length enabled and we are in an odd frame
-				//sequence, subtract one from newly set clock length
-				if(!p2haltloop && (modePos&1))
-					p2LengthCtr--;
+				p1LengthCtr--;
+				//disable channel immediately if length
+				//reached 0 from this extra clock
+				if(p1LengthCtr == 0)
+					p1enable = false;
 			}
-			//trigger reloads frequency timers
-			p2Cycle = 0;
-			if(freq2)
-				p2freqCtr = (2048-freq2)*4;
-			//trigger resets env volume
+			if(val&(1<<7))
+			{
+				if(p1dacenable)
+					p1enable = true;
+				if(p1LengthCtr == 0)
+				{
+					p1LengthCtr = 64;
+					//if length enabled and we are in an odd frame
+					//sequence, subtract one from newly set clock length
+					if(!p1haltloop && (modePos&1))
+						p1LengthCtr--;
+				}
+				//trigger reloads frequency timers
+				p1Cycle = 0;
+				if(freq1)
+					p1freqCtr = (2048-freq1)*4;
+				//trigger resets env volume
+				p1Env.curVol = p1Env.vol;
+				//period 0 is actually period 8!
+				p1Env.divider = (p1Env.period-1)&7;
+				//trigger used to enable/disable sweep
+				if(p1Sweep.period || p1Sweep.shift)
+					p1Sweep.enabled = true;
+				else
+					p1Sweep.enabled = false;
+				//trigger also resets divider, neg mode and frequency
+				p1Sweep.inNegative = false;
+				p1Sweep.pfreq = freq1;
+				//period 0 is actually period 8!
+				p1Sweep.divider = (p1Sweep.period-1)&7;
+				//if sweep shift>0, pre-calc frequency
+				if(p1Sweep.shift)
+					sweepUpdateFreq(&p1Sweep, &freq1, false);
+			}
+			//printf("P1 new freq %04x\n", freq1);
+			break;
+		case 0x16:
+			p2seq = pulseSeqs[val>>6];
+			p2LengthCtr = 64-(val&0x3F);
+			break;
+		case 0x17:
+			p2Env.vol = (val>>4)&0xF;
 			p2Env.curVol = p2Env.vol;
-			//period 0 is actually period 8!
-			p2Env.divider = (p2Env.period-1)&7;
-		}
-		//printf("P2 new freq %04x\n", freq2);
-	}
-	else if(reg == 0x1A)
-	{
-		wavdacenable = ((val&0x80)!=0);
-		if(!wavdacenable)
-			wavenable = false;
-	}
-	else if(reg == 0x1B)
-		wavLengthCtr = 256-val;
-	else if(reg == 0x1C)
-	{
-		//printf("wavVolShift %i\n", (val>>5)&3);
-		switch((val>>5)&3)
-		{
-			case 0:
-				wavVolShift=4;
-				break;
-			case 1:
-				wavVolShift=0;
-				break;
-			case 2:
-				wavVolShift=1;
-				break;
-			case 3:
-				wavVolShift=2;
-				break;
-		}
-	}
-	else if(reg == 0x1D)
-	{
-		//printf("wav time low %02x\n", val);
-		wavFreq = ((wavFreq&~0xFF) | val);
-	}
-	else if(reg == 0x1E)
-	{
-		bool wavprevhaltloop = wavhaltloop;
-		wavhaltloop = ((val&(1<<6)) == 0);
-		wavFreq = (wavFreq&0xFF) | ((val&7)<<8);
-		//if length was previously frozen and we are in
-		//an odd frame sequence, clock length right now
-		if(wavprevhaltloop && !wavhaltloop && wavLengthCtr && (modePos&1))
-		{
-			wavLengthCtr--;
-			//disable channel immediately if length
-			//reached 0 from this extra clock
-			if(wavLengthCtr == 0)
+			p2Env.modeadd = (val&8)!=0;
+			p2dacenable = (p2Env.modeadd || p2Env.vol);
+			if(!p2dacenable)
+				p2enable = false;
+			p2Env.period = val&7;
+			break;
+		case 0x18:
+			freq2 = ((freq2&~0xFF) | val);
+			break;
+		case 0x19:
+			p2prevhaltloop = p2haltloop;
+			p2haltloop = ((val&(1<<6)) == 0);
+			freq2 = (freq2&0xFF) | ((val&7)<<8);
+			//if length was previously frozen and we are in
+			//an odd frame sequence, clock length right now
+			if(p2prevhaltloop && !p2haltloop && p2LengthCtr && (modePos&1))
+			{
+				p2LengthCtr--;
+				//disable channel immediately if length
+				//reached 0 from this extra clock
+				if(p2LengthCtr == 0)
+					p2enable = false;
+			}
+			if(val&(1<<7))
+			{
+				if(p2dacenable)
+					p2enable = true;
+				if(p2LengthCtr == 0)
+				{
+					p2LengthCtr = 64;
+					//if length enabled and we are in an odd frame
+					//sequence, subtract one from newly set clock length
+					if(!p2haltloop && (modePos&1))
+						p2LengthCtr--;
+				}
+				//trigger reloads frequency timers
+				p2Cycle = 0;
+				if(freq2)
+					p2freqCtr = (2048-freq2)*4;
+				//trigger resets env volume
+				p2Env.curVol = p2Env.vol;
+				//period 0 is actually period 8!
+				p2Env.divider = (p2Env.period-1)&7;
+			}
+			//printf("P2 new freq %04x\n", freq2);
+			break;
+		case 0x1A:
+			wavdacenable = ((val&0x80)!=0);
+			if(!wavdacenable)
 				wavenable = false;
-		}
-		if(val&(1<<7))
-		{
-			if(wavdacenable)
-				wavenable = true;
-			if(wavLengthCtr == 0)
+			break;
+		case 0x1B:
+			wavLengthCtr = 256-val;
+			break;
+		case 0x1C:
+			//printf("wavVolShift %i\n", (val>>5)&3);
+			switch((val>>5)&3)
 			{
-				wavLengthCtr = 256;
-				//if length enabled and we are in an odd frame
-				//sequence, subtract one from newly set clock length
-				if(!wavhaltloop && (modePos&1))
-					wavLengthCtr--;
+				case 0:
+					wavVolShift=4;
+					break;
+				case 1:
+					wavVolShift=0;
+					break;
+				case 2:
+					wavVolShift=1;
+					break;
+				case 3:
+					wavVolShift=2;
+					break;
 			}
-			//trigger reloads frequency timers
-			wavCycle = 0;
-			//not sure why +4 needed to sync initally,
-			//probably because of sample buffer byte
-			wavFreqCtr = ((2048-wavFreq)*2)+4;
-		}
-		//printf("wav new freq %04x\n", wavFreq);
-	}
-	else if(reg == 0x20)
-	{
-		noiseLengthCtr = 64-(val&0x3F);
-	}
-	else if(reg == 0x21)
-	{
-		noiseEnv.vol = (val>>4)&0xF;
-		noiseEnv.curVol = noiseEnv.vol;
-		noiseEnv.modeadd = (val&8)!=0;
-		noisedacenable = (noiseEnv.modeadd || noiseEnv.vol);
-		if(!noisedacenable)
-			noiseenable = false;
-		noiseEnv.period=val&7;
-	}
-	else if(reg == 0x22)
-	{
-		if((val>>4)<14)
-			noiseFreq = noisePeriod[val&0x7]<<(val>>4);
-		else
-			noiseFreq = 0;
-		noiseMode1 = ((val&0x8) != 0);
-	}
-	else if(reg == 0x23)
-	{
-		bool prevnoisehaltloop = noisehaltloop;
-		noisehaltloop = ((val&(1<<6)) == 0);
-		//if length was previously frozen and we are in
-		//an odd frame sequence, clock length right now
-		if(prevnoisehaltloop && !noisehaltloop && noiseLengthCtr && (modePos&1))
-		{
-			noiseLengthCtr--;
-			//disable channel immediately if length
-			//reached 0 from this extra clock
-			if(noiseLengthCtr == 0)
-				noiseenable = false;
-		}
-		if(val&(1<<7))
-		{
-			if(noisedacenable)
-				noiseenable = true;
-			if(noiseLengthCtr == 0)
+			break;
+		case 0x1D:
+			//printf("wav time low %02x\n", val);
+			wavFreq = ((wavFreq&~0xFF) | val);
+			break;
+		case 0x1E:
+			wavprevhaltloop = wavhaltloop;
+			wavhaltloop = ((val&(1<<6)) == 0);
+			wavFreq = (wavFreq&0xFF) | ((val&7)<<8);
+			//if length was previously frozen and we are in
+			//an odd frame sequence, clock length right now
+			if(wavprevhaltloop && !wavhaltloop && wavLengthCtr && (modePos&1))
 			{
-				noiseLengthCtr = 64;
-				//if length enabled and we are in an odd frame
-				//sequence, subtract one from newly set clock length
-				if(!noisehaltloop && (modePos&1))
-					noiseLengthCtr--;
+				wavLengthCtr--;
+				//disable channel immediately if length
+				//reached 0 from this extra clock
+				if(wavLengthCtr == 0)
+					wavenable = false;
 			}
-			//trigger reloads frequency timers
-			noiseFreqCtr = noiseFreq;
-			//trigger resets env volume
+			if(val&(1<<7))
+			{
+				if(wavdacenable)
+					wavenable = true;
+				if(wavLengthCtr == 0)
+				{
+					wavLengthCtr = 256;
+					//if length enabled and we are in an odd frame
+					//sequence, subtract one from newly set clock length
+					if(!wavhaltloop && (modePos&1))
+						wavLengthCtr--;
+				}
+				//trigger reloads frequency timers
+				wavCycle = 0;
+				//not sure why +4 needed to sync initally,
+				//probably because of sample buffer byte
+				wavFreqCtr = ((2048-wavFreq)*2)+4;
+			}
+			//printf("wav new freq %04x\n", wavFreq);
+			break;
+		case 0x20:
+			noiseLengthCtr = 64-(val&0x3F);
+			break;
+		case 0x21:
+			noiseEnv.vol = (val>>4)&0xF;
 			noiseEnv.curVol = noiseEnv.vol;
-			//period 0 is actually period 8!
-			noiseEnv.divider = (noiseEnv.period-1)&7;
-		}
+			noiseEnv.modeadd = (val&8)!=0;
+			noisedacenable = (noiseEnv.modeadd || noiseEnv.vol);
+			if(!noisedacenable)
+				noiseenable = false;
+			noiseEnv.period=val&7;
+			break;
+		case 0x22:
+			if((val>>4)<14)
+				noiseFreq = noisePeriod[val&0x7]<<(val>>4);
+			else
+				noiseFreq = 0;
+			noiseMode1 = ((val&0x8) != 0);
+			break;
+		case 0x23:
+			noiseprevhaltloop = noisehaltloop;
+			noisehaltloop = ((val&(1<<6)) == 0);
+			//if length was previously frozen and we are in
+			//an odd frame sequence, clock length right now
+			if(noiseprevhaltloop && !noisehaltloop && noiseLengthCtr && (modePos&1))
+			{
+				noiseLengthCtr--;
+				//disable channel immediately if length
+				//reached 0 from this extra clock
+				if(noiseLengthCtr == 0)
+					noiseenable = false;
+			}
+			if(val&(1<<7))
+			{
+				if(noisedacenable)
+					noiseenable = true;
+				if(noiseLengthCtr == 0)
+				{
+					noiseLengthCtr = 64;
+					//if length enabled and we are in an odd frame
+					//sequence, subtract one from newly set clock length
+					if(!noisehaltloop && (modePos&1))
+						noiseLengthCtr--;
+				}
+				//trigger reloads frequency timers
+				noiseFreqCtr = noiseFreq;
+				//trigger resets env volume
+				noiseEnv.curVol = noiseEnv.vol;
+				//period 0 is actually period 8!
+				noiseEnv.divider = (noiseEnv.period-1)&7;
+			}
+			break;
+		default:
+			break;
 	}
 }
 
@@ -748,30 +741,28 @@ static const uint8_t apuReadMask[0x20] =
 	0xFF, 0x00, 0x00, 0xBF, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
 };
 
-uint8_t apuGet8(uint8_t reg)
+uint8_t apuGetReg8(uint16_t addr)
 {
-	if(reg == 0x26)
+	uint8_t reg = addr&0xFF;
+	//printf("APU get %02x\n", reg);
+	switch(reg)
 	{
-		//uint8_t intrflags = ((apu_interrupt<<6) | (dmc_interrupt<<7));
-		uint8_t apuretval = soundEnabled?((p1enable) | ((p2enable)<<1) | ((wavenable)<<2) | ((noiseenable)<<3)|0xF0):0x70;
-		//printf("Get 0x26 %02x\n",apuretval);
-		//apu_interrupt = false;
-		return apuretval;
+		case 0x10: case 0x11: case 0x12: case 0x13: case 0x14: case 0x15: case 0x16: case 0x17:
+		case 0x18: case 0x19: case 0x1A: case 0x1B: case 0x1C: case 0x1D: case 0x1E: case 0x1F:
+		case 0x20: case 0x21: case 0x22: case 0x23: case 0x24: case 0x25: /*case 0x26:*/ case 0x27:
+		case 0x28: case 0x29: case 0x2A: case 0x2B: case 0x2C: case 0x2D: case 0x2E: case 0x2F:
+			return APU_IO_Reg[reg]|apuReadMask[reg-0x10];
+		case 0x26:
+			return soundEnabled?((p1enable) | ((p2enable)<<1) | ((wavenable)<<2) | ((noiseenable)<<3)|0xF0):0x70;
+		case 0x30: case 0x31: case 0x32: case 0x33: case 0x34: case 0x35: case 0x36: case 0x37:
+		case 0x38: case 0x39: case 0x3A: case 0x3B: case 0x3C: case 0x3D: case 0x3E: case 0x3F:
+			if(wavenable)
+				return APU_IO_Reg[0x30+(wavCycle>>1)];
+			return APU_IO_Reg[reg];
+		default:
+			break;
 	}
-	uint8_t val;
-	if(reg >= 0x10 && reg < 0x30)
-		val = APU_IO_Reg[reg]|apuReadMask[reg-0x10];
-	else if(reg >= 0x30 && reg < 0x40)
-	{
-		if(wavenable)
-			val = APU_IO_Reg[0x30+(wavCycle>>1)];
-		else
-			val = APU_IO_Reg[reg];
-	}
-	else
-		val = APU_IO_Reg[reg];
-	//printf("APU get %02x %02x\n", reg, val);
-	return val;
+	return 0xFF;
 }
 
 uint8_t *apuGetBuf()

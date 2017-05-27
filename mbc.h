@@ -20,8 +20,6 @@ enum {
 	MBC_TYPE_GBS,
 };
 
-typedef void (*set8FuncT)(uint16_t, uint8_t);
-
 void mbcInit(uint8_t type);
 
 extern set8FuncT mbcSet8;
