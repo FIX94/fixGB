@@ -1618,13 +1618,13 @@ void cpuSetSpeed(bool cgb)
 	{
 		printf("CPU: CGB Speed\n");
 		cpuCgbSpeed = true;
-		cpuTimer = 2;
+		cpuTimer = 1;
 	}
 	else
 	{
 		printf("CPU: DMG Speed\n");
 		cpuCgbSpeed = false;
-		cpuTimer = 4;
+		cpuTimer = 3;
 	}
 }
 

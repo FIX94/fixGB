@@ -26,7 +26,7 @@
 #define DEBUG_KEY 0
 #define DEBUG_LOAD_INFO 1
 
-static const char *VERSION_STRING = "fixGB Alpha v0.4";
+static const char *VERSION_STRING = "fixGB Alpha v0.4.1";
 
 static void gbEmuDisplayFrame(void);
 static void gbEmuMainLoop(void);
@@ -40,7 +40,7 @@ static void gbEmuHandleSpecialUp(int key, int x, int y);
 uint8_t *emuGBROM = NULL;
 char *emuSaveName = NULL;
 //used externally
-uint32_t *textureImage = NULL;
+uint32_t textureImage[0x9A00];
 bool nesPause = false;
 bool ppuDebugPauseFrame = false;
 bool gbEmuGBSPlayback = false;
@@ -50,7 +50,7 @@ uint16_t gbsInitAddr = 0;
 uint16_t gbsPlayAddr = 0;
 uint16_t gbsSP = 0;
 uint8_t gbsTracksTotal = 0, gbsTMA = 0, gbsTAC = 0;
-uint8_t cpuTimer = 4;
+uint8_t cpuTimer = 3;
 bool allowCgbRegs = false;
 
 static bool inPause = false;
@@ -197,7 +197,6 @@ int main(int argc, char** argv)
 	emuMainFrameStart = GetTickCount();
 	#endif
 	#endif
-	textureImage = malloc(visibleImg);
 	memset(textureImage,0,visibleImg);
 	//do one scanline per idle loop
 	mainLoopRuns = 70224;
@@ -248,9 +247,6 @@ static void gbEmuDeinit(void)
 	if(emuSaveName != NULL)
 		free(emuSaveName);
 	emuSaveName = NULL;
-	if(textureImage != NULL)
-		free(textureImage);
-	textureImage = NULL;
 	//printf("Bye!\n");
 }
 
@@ -258,9 +254,8 @@ static void gbEmuDeinit(void)
 bool emuSkipVsync = false;
 bool emuSkipFrame = false;
 
-static uint16_t apuClock = 1;
-static uint16_t cpuClock = 1;
-static uint16_t memClock = 1;
+static uint8_t mainClock = 0;
+static uint8_t memClock = 0;
 
 static void gbEmuMainLoop(void)
 {
@@ -276,26 +271,20 @@ static void gbEmuMainLoop(void)
 			return;
 		}
 		//run APU first to make sure its synced
-		if(apuClock >= 16)
+		if(!(mainClock&15) && !apuCycle())
 		{
-			if(!apuCycle())
-			{
-				#if (WINDOWS_BUILD && DEBUG_MAIN_CALLS)
-				emuMainTimesSkipped++;
-				#endif
-				audioSleep();
-				return;
-			}
-			apuClock = 1;
+			#if (WINDOWS_BUILD && DEBUG_MAIN_CALLS)
+			emuMainTimesSkipped++;
+			#endif
+			audioSleep();
+			return;
 		}
-		else
-			apuClock++;
 		//channel timer updates
 		apuClockTimers();
 		//run possible DMA next
 		memDmaClockTimers();
 		//run CPU (and mem clocks) next
-		if(cpuClock >= cpuTimer)
+		if(!(mainClock&cpuTimer))
 		{
 			//main CPU clock
 			if(!cpuCycle())
@@ -305,17 +294,10 @@ static void gbEmuMainLoop(void)
 			}
 			//mem clock tied to CPU clock, so
 			//double speed in CGB mode!
-			if(memClock >= 4)
-			{
+			if(!(memClock&3))
 				memClockTimers();
-				memClock = 1;
-			}
-			else
-				memClock++;
-			cpuClock = 1;
+			memClock++;
 		}
-		else
-			cpuClock++;
 		//run PPU last
 		if(!ppuCycle())
 			exit(EXIT_SUCCESS);
@@ -344,6 +326,7 @@ static void gbEmuMainLoop(void)
 			else if(!gbsTimerMode)
 				cpuPlayGBS();
 		}
+		mainClock++;
 	}
 	while(mainLoopPos--);
 	mainLoopPos = mainLoopRuns;

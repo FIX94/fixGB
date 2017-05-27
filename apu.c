@@ -9,6 +9,7 @@
 #include <stdbool.h>
 #include <inttypes.h>
 #include <malloc.h>
+#include <string.h>
 #include "apu.h"
 #include "audio.h"
 #include "mem.h"
@@ -228,12 +229,11 @@ bool apuCycle()
 			else
 				noiseOut = 0;
 		}
-		//should be 60.f at max but that'd be way too quiet after LP and HP
-		float curIn = ((float)(p1Out + p2Out + wavOut + noiseOut))/45.f;
+		float curIn = ((float)(p1Out + p2Out + wavOut + noiseOut))/60.f;
 		float curLPout = lastLPOut[apuCurChan]+(lpVal*(curIn-lastLPOut[apuCurChan]));
 		float curHPOut = hpVal*(lastHPOut[apuCurChan]+curLPout-curIn);
 		//set output
-		apuOutBuf[curBufPos] = soundEnabled?(-curHPOut):0;
+		apuOutBuf[curBufPos] = ((soundEnabled)?(curHPOut):0);
 		lastLPOut[apuCurChan] = curLPout;
 		lastHPOut[apuCurChan] = curHPOut;
 		curBufPos++;

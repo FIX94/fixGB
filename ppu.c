@@ -7,6 +7,7 @@
 
 #include <stdio.h>
 #include <stdbool.h>
+#include <string.h>
 #include <inttypes.h>
 #include "cpu.h"
 #include "ppu.h"
@@ -45,7 +46,7 @@ typedef void (*drawFunc)(size_t);
 static drawFunc ppuDrawDot = NULL;
 
 //from main.c
-extern uint32_t *textureImage;
+extern uint32_t textureImage[0x9A00];
 extern bool allowCgbRegs;
 //used externally
 uint8_t ppuCgbBank = 0;
@@ -218,6 +219,11 @@ ppuIncreasePos:
 			if(PPU_Reg[1]&PPU_VBLANK_IRQ)
 			{
 				//printf("VBlank STAT IRQ\n");
+				memEnableStatIrq();
+			}
+			if(PPU_Reg[1]&PPU_OAM_IRQ)
+			{
+				//printf("OAM STAT IRQ\n");
 				memEnableStatIrq();
 			}
 			//printf("VBlank Start\n");
