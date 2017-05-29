@@ -28,11 +28,18 @@
 #define NOISE_ENABLE_RIGHT (1<<3)
 
 static uint8_t APU_IO_Reg[0x50];
-
+#if AUDIO_FLOAT
+static float lpVal;
+static float hpVal;
+static const float volLevel[8] = {
+	0.125f, 0.25f, 0.375f, 0.5f, 0.625f, 0.75f, 0.875f, 1.0f,
+};
+static float *apuOutBuf;
+#else
 static int32_t lpVal;
 static int32_t hpVal;
-
 static int16_t *apuOutBuf;
+#endif
 static uint32_t apuBufSize;
 static uint32_t apuBufSizeBytes;
 static uint32_t curBufPos;
@@ -109,19 +116,33 @@ void apuInitBufs()
 	//effective frequency for original LCD Video out
 	apuFrequency = 262144;
 	double dt = 1.0/((double)apuFrequency);
+
 	//LP at 22kHz
 	double rc = 1.0/(M_2_PI * 22000.0);
+#if AUDIO_FLOAT
+	lpVal = dt / (rc + dt);
+#else
 	//convert to 32bit int for calcs later
-	lpVal = (int32_t)((dt / (rc + dt))*65536.0);
+	lpVal = (int32_t)((dt / (rc + dt))*32768.0);
+#endif
 	//HP at 40Hz
 	rc = 1.0/(M_2_PI * 40.0);
+#if AUDIO_FLOAT
+	hpVal = rc / (rc + dt);
+#else
 	//convert to 32bit int for calcs later
-	hpVal = (int32_t)((rc / (rc + dt))*65536.0);
-
+	hpVal = (int32_t)((rc / (rc + dt))*32768.0);
+#endif
 	apuBufSize = apuFrequency/60*2;
+#if AUDIO_FLOAT
+	apuBufSizeBytes = apuBufSize*sizeof(float);
+	apuOutBuf = (float*)malloc(apuBufSizeBytes);
+	printf("Audio: 32-bit Float Output\n"); 
+#else
 	apuBufSizeBytes = apuBufSize*sizeof(int16_t);
-
 	apuOutBuf = (int16_t*)malloc(apuBufSizeBytes);
+	printf("Audio: 16-bit Short Output\n");
+#endif
 }
 
 void apuDeinitBufs()
@@ -170,7 +191,11 @@ void apuInit()
 	APU_IO_Reg[0x25] = 0xF3;
 }
 
+#if AUDIO_FLOAT
+static float lastHPOutLeft = 0, lastHPOutRight = 0, lastLPOutLeft = 0, lastLPOutRight = 0;
+#else
 static int32_t lastHPOutLeft = 0, lastHPOutRight = 0, lastLPOutLeft = 0, lastLPOutRight = 0;
+#endif
 static uint8_t lastP1OutLeft = 0, lastP2OutLeft = 0, lastWavOutLeft = 0, lastNoiseOutLeft = 0;
 static uint8_t lastP1OutRight = 0, lastP2OutRight = 0, lastWavOutRight = 0, lastNoiseOutRight = 0;
 extern bool emuSkipVsync, emuSkipFrame;
@@ -298,24 +323,45 @@ bool apuCycle()
 	}
 	else
 		curNoiseOut = 0;
+#if AUDIO_FLOAT
 	//gen output Left
-	int32_t curInLeft = ((p1OutLeft + p2OutLeft + wavOutLeft + noiseOutLeft))*(apuMasterVolLeft+1)<<7;
-	int32_t curLPOutLeft = lastLPOutLeft+((lpVal*(curInLeft-lastLPOutLeft))>>16);
-	int32_t curHPOutLeft = (hpVal*(lastHPOutLeft+lastLPOutLeft-curLPOutLeft))>>16;
+	float curInLeft = ((float)(p1OutLeft + p2OutLeft + wavOutLeft + noiseOutLeft))*volLevel[apuMasterVolLeft]/32.f;
+	float curLPOutLeft = lastLPOutLeft+(lpVal*(curInLeft-lastLPOutLeft));
+	float curHPOutLeft = hpVal*(lastHPOutLeft+lastLPOutLeft-curLPOutLeft);
 	//gen output Right
-	int32_t curInRight = ((p1OutRight + p2OutRight + wavOutRight + noiseOutRight))*(apuMasterVolRight+1)<<7;
-	int32_t curLPOutRight = lastLPOutRight+((lpVal*(curInRight-lastLPOutRight))>>16);
-	int32_t curHPOutRight = (hpVal*(lastHPOutRight+lastLPOutRight-curLPOutRight))>>16;
+	float curInRight = ((float)(p1OutRight + p2OutRight + wavOutRight + noiseOutRight))*volLevel[apuMasterVolRight]/32.f;
+	float curLPOutRight = lastLPOutRight+(lpVal*(curInRight-lastLPOutRight));
+	float curHPOutRight = hpVal*(lastHPOutRight+lastLPOutRight-curLPOutRight);
 	//set output Left
-	apuOutBuf[curBufPos++] = ((soundEnabled)?(curHPOutLeft):0);
+	apuOutBuf[curBufPos++] = ((soundEnabled)?curHPOutLeft:0);
 	//set output Right
-	apuOutBuf[curBufPos++] = ((soundEnabled)?(curHPOutRight):0);
+	apuOutBuf[curBufPos++] = ((soundEnabled)?curHPOutRight:0);
 	//save HP and LP Left
 	lastLPOutLeft = curLPOutLeft;
 	lastHPOutLeft = curHPOutLeft;
 	//save HP and LP Right
 	lastLPOutRight = curLPOutRight;
 	lastHPOutRight = curHPOutRight;
+#else
+	//gen output Left
+	int32_t curInLeft = ((p1OutLeft + p2OutLeft + wavOutLeft + noiseOutLeft))*(apuMasterVolLeft+1)<<7;
+	int32_t curLPOutLeft = lastLPOutLeft+((lpVal*(curInLeft-lastLPOutLeft))>>15);
+	int32_t curHPOutLeft = (hpVal*(lastHPOutLeft+lastLPOutLeft-curLPOutLeft))>>15;
+	//gen output Right
+	int32_t curInRight = ((p1OutRight + p2OutRight + wavOutRight + noiseOutRight))*(apuMasterVolRight+1)<<7;
+	int32_t curLPOutRight = lastLPOutRight+((lpVal*(curInRight-lastLPOutRight))>>15);
+	int32_t curHPOutRight = (hpVal*(lastHPOutRight+lastLPOutRight-curLPOutRight))>>15;
+	//set output Left
+	apuOutBuf[curBufPos++] = ((soundEnabled)?((curHPOutLeft > 32767)?(32767):((curHPOutLeft < -32768)?(-32768):curHPOutLeft)):0);
+	//set output Right
+	apuOutBuf[curBufPos++] = ((soundEnabled)?((curHPOutRight > 32767)?(32767):((curHPOutRight < -32768)?(-32768):curHPOutRight)):0);
+	//save HP and LP Left
+	lastLPOutLeft = curLPOutLeft;
+	lastHPOutLeft = curHPOutLeft;
+	//save HP and LP Right
+	lastLPOutRight = curLPOutRight;
+	lastHPOutRight = curHPOutRight;
+#endif
 	return true;
 }
 
