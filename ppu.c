@@ -54,6 +54,8 @@ uint8_t ppuCgbBank = 0;
 static uint32_t ppuClock;
 static uint8_t ppuMode;
 static uint8_t ppuDots;
+static uint8_t ppuLines;
+static uint8_t ppuLineMatch;
 static uint8_t ppuOAMpos;
 static uint8_t ppuOAM2pos;
 static uint8_t ppuCgbBgPalPos;
@@ -77,6 +79,8 @@ void ppuInit()
 	ppuClock = 0;
 	ppuMode = 0;
 	ppuDots = 0;
+	ppuLines = 0;
+	ppuLineMatch = 0;
 	ppuOAMpos = 0;
 	ppuOAM2pos = 0;
 	ppuCgbBgPalPos = 0;
@@ -135,7 +139,22 @@ bool ppuCycle()
 		goto ppuIncreasePos;
 	if(!(PPU_Reg[0] & PPU_ENABLE))
 		return true;
-	if(PPU_Reg[4] < 144)
+	//Update line match stat
+	ppuLineMatch = ((PPU_Reg[4] == PPU_Reg[5]) ? PPU_LINEMATCH : 0);
+	//check for line IRQ on first clock
+	if(ppuClock == 0)
+	{
+		//DONT check line 0 here, already done further below
+		if((ppuLines > 0) && ppuLineMatch)
+		{
+			if(PPU_Reg[1]&PPU_LINEMATCH_IRQ)
+			{
+				//printf("Line STAT IRQ at %i\n",ppuLines);
+				memEnableStatIrq();
+			}
+		}
+	}
+	if(ppuLines < 144)
 	{
 		//do OAM updates
 		if(ppuClock < 80)
@@ -159,7 +178,7 @@ bool ppuCycle()
 				{
 					int16_t cmpPos = ((int16_t)OAMcYpos)-16;
 					uint8_t cSpriteAdd = (PPU_Reg[0] & PPU_SPRITE_8_16) ? 16 : 8;
-					if(cmpPos <= PPU_Reg[4] && (cmpPos+cSpriteAdd) > PPU_Reg[4])
+					if(cmpPos <= ppuLines && (cmpPos+cSpriteAdd) > ppuLines)
 					{
 						memcpy(PPU_OAM2+(ppuOAM2pos<<2), PPU_OAM+(ppuOAMpos<<2), 4);
 						ppuOAM2pos++;
@@ -177,7 +196,7 @@ bool ppuCycle()
 		else if(ppuClock >= 92 && ppuClock < 252)
 		{
 			//makes it possible to draw 160x144 in here :)
-			size_t drawPos = (ppuDots)+(PPU_Reg[4]*160);
+			size_t drawPos = (ppuDots)+(ppuLines*160);
 			ppuDrawDot(drawPos);
 			ppuDots++;
 		}
@@ -191,17 +210,13 @@ bool ppuCycle()
 				memEnableStatIrq();
 			}
 		}
-	}
-ppuIncreasePos:
-	/* increase pos */
-	ppuClock++;
-	if(ppuClock == 456)
+	} //VERY important, reg 4 to the outside gets set back to 0 early!
+	else if(ppuLines == 153 && ppuClock == 4)
 	{
-		ppuClock = 0;
-		PPU_Reg[4]++;
-		//zelda seems to want a STAT IRQ for line 0 on the line before it which breaks
-		//other games, TODO figure out why its intro looks correct with PPU_Reg == 153
-		if((PPU_Reg[4] == PPU_Reg[5]) || (PPU_Reg[5] == 0 && PPU_Reg[4] == 154))
+		PPU_Reg[4] = 0;
+		//check for linematch and IRQ early too
+		ppuLineMatch = ((PPU_Reg[4] == PPU_Reg[5]) ? PPU_LINEMATCH : 0);
+		if(ppuLineMatch)
 		{
 			if(PPU_Reg[1]&PPU_LINEMATCH_IRQ)
 			{
@@ -209,8 +224,16 @@ ppuIncreasePos:
 				memEnableStatIrq();
 			}
 		}
+	}
+ppuIncreasePos:
+	/* increase pos */
+	ppuClock++;
+	if(ppuClock == 456)
+	{
+		ppuClock = 0;
+		ppuLines++;
 		//check for vblank or draw done
-		if(PPU_Reg[4] == 144)
+		if(ppuLines == 144)
 		{
 			ppuMode = 1; //VBlank
 			ppuHBlank = false;
@@ -228,12 +251,14 @@ ppuIncreasePos:
 			}
 			//printf("VBlank Start\n");
 		}
-		else if(PPU_Reg[4] == 154)
+		else if(ppuLines == 154)
 		{
-			PPU_Reg[4] = 0; //Draw Done!
+			ppuLines = 0; //Draw Done!
 			ppuFrameDone = true;
 			ppuVBlank = false;
 		}
+		//copy our line val into public reg
+		PPU_Reg[4] = ppuLines;
 	}
 	return true;
 }
@@ -279,17 +304,17 @@ uint8_t ppuGetReg8(uint16_t addr)
 			return PPU_Reg[reg];
 		case 0x1:
 			if(!(PPU_Reg[0] & PPU_ENABLE))
-				return 0; //This is not all that clear anywhere...
+				return 0x80;
 			else
-				return (PPU_Reg[1]&(~7))|(ppuMode&3)|((PPU_Reg[4]==PPU_Reg[5])?PPU_LINEMATCH:0);
+				return (PPU_Reg[1]&(~7))|(ppuMode&3)|(ppuLineMatch&4)|0x80;
 		case 0x28: //FF68
-			return ppuCgbBgPalPos;
+			return ppuCgbBgPalPos|0x40;
 		case 0x29: //FF69
 			if(!(PPU_Reg[0] & PPU_ENABLE) || (ppuMode != 3))
 				return PPU_CGB_BGPAL[ppuCgbBgPalPos&0x3F];
 			return 0xFF;
 		case 0x2A: //FF6A
-			return ppuCgbObjPalPos;
+			return ppuCgbObjPalPos|0x40;
 		case 0x2B: //FF6B
 			if(!(PPU_Reg[0] & PPU_ENABLE) || (ppuMode != 3))
 				return PPU_CGB_OBJPAL[ppuCgbObjPalPos&0x3F];
@@ -331,10 +356,11 @@ void ppuSetReg8(uint16_t addr, uint8_t val)
 			PPU_Reg[0] = val;
 			if(!(val&PPU_ENABLE))
 			{
+				ppuLines = 0;
 				PPU_Reg[4] = 0;
 				//since it resets a bit into the screen
 				//it wont get through OAM fully
-				ppuClock = 6;
+				ppuClock = 4;
 				ppuOAMpos = 0; //Reset check pos
 				ppuOAM2pos = 0; //Reset array pos
 				ppuMode = 2; //OAM
@@ -455,7 +481,7 @@ static uint8_t ppuDoSpritesDMG(uint8_t color, uint8_t tCol)
 
 			uint8_t OAMcYpos = PPU_OAM2[(i<<2)];
 			uint8_t cmpYPos = OAMcYpos-16;
-			uint8_t cSpriteY = (PPU_Reg[4] - cmpYPos)&cSpriteAnd;
+			uint8_t cSpriteY = (ppuLines - cmpYPos)&cSpriteAnd;
 			uint8_t cSpriteAdd = 0; //used to select which 8 by 16 tile
 			if(cSpriteY > 7) //8 by 16 select
 			{
@@ -526,7 +552,7 @@ static void ppuDrawDotDMG(size_t drawPos)
 	if(PPU_Reg[0]&PPU_BG_ENABLE)
 	{
 		uint8_t bgXPos = ppuDots+PPU_Reg[3];
-		uint8_t bgYPos = PPU_Reg[4]+PPU_Reg[2];
+		uint8_t bgYPos = ppuLines+PPU_Reg[2];
 		uint16_t vramTilePos = ((PPU_Reg[0]&PPU_BG_TILEMAP_UP)?0x1C00:0x1800)|(((bgXPos>>3)+((bgYPos>>3)<<5))&0x3FF);
 		if(PPU_Reg[0]&PPU_BG_TILEDAT_LOW)
 		{
@@ -550,10 +576,10 @@ static void ppuDrawDotDMG(size_t drawPos)
 			color |= 2;
 		tCol = (PPU_Reg[7]>>(color<<1));
 	}
-	if(PPU_Reg[0]&PPU_WINDOW_ENABLE && (PPU_Reg[0xB]) <= ppuDots+7 && PPU_Reg[0xA] <= PPU_Reg[4])
+	if(PPU_Reg[0]&PPU_WINDOW_ENABLE && (PPU_Reg[0xB]) <= ppuDots+7 && PPU_Reg[0xA] <= ppuLines)
 	{
 		uint8_t windowXPos = ppuDots+7-PPU_Reg[0xB];
-		uint8_t windowYPos = PPU_Reg[4]-PPU_Reg[0xA];
+		uint8_t windowYPos = ppuLines-PPU_Reg[0xA];
 		uint16_t vramTilePos = ((PPU_Reg[0]&PPU_WINDOW_TILEMAP_UP)?0x1C00:0x1800)|(((windowXPos>>3)+((windowYPos>>3)<<5))&0x3FF);
 		if(PPU_Reg[0]&PPU_BG_TILEDAT_LOW)
 		{
@@ -603,7 +629,7 @@ static uint16_t ppuDoSpritesCGB(uint8_t color, uint16_t cgbRGB)
 
 			uint8_t OAMcYpos = PPU_OAM2[(i<<2)];
 			uint8_t cmpYPos = OAMcYpos-16;
-			uint8_t cSpriteY = (PPU_Reg[4] - cmpYPos)&cSpriteAnd;
+			uint8_t cSpriteY = (ppuLines - cmpYPos)&cSpriteAnd;
 			uint8_t cSpriteAdd = 0; //used to select which 8 by 16 tile
 			if(cSpriteY > 7) //8 by 16 select
 			{
@@ -667,7 +693,7 @@ static void ppuDrawDotCGB(size_t drawPos)
 {
 	uint8_t ChrRegA = 0, ChrRegB = 0, color = 0;
 	uint8_t bgXPos = ppuDots+PPU_Reg[3];
-	uint8_t bgYPos = PPU_Reg[4]+PPU_Reg[2];
+	uint8_t bgYPos = ppuLines+PPU_Reg[2];
 	uint16_t vramTilePos = ((PPU_Reg[0]&PPU_BG_TILEMAP_UP)?0x1C00:0x1800)|(((bgXPos>>3)+((bgYPos>>3)<<5))&0x3FF);
 	uint8_t tCgbVal = PPU_VRAM[0x2000|(vramTilePos&0x1FFF)];
 	uint16_t tCgbBank = (tCgbVal&PPU_TILE_CGB_BANK)?0x2000:0x0;
@@ -698,10 +724,10 @@ static void ppuDrawDotCGB(size_t drawPos)
 	bool bgHighestPrio = (color && (tCgbVal & PPU_TILE_PRIO) && (PPU_Reg[0] & PPU_BG_WINDOW_PRIO));
 	uint8_t pByte = ((tCgbVal&7)<<3)|(color<<1);
 	uint16_t cgbRGB = (PPU_CGB_BGPAL[pByte])|(PPU_CGB_BGPAL[pByte+1]<<8);
-	if(PPU_Reg[0]&PPU_WINDOW_ENABLE && (PPU_Reg[0xB]) <= ppuDots+7 && PPU_Reg[0xA] <= PPU_Reg[4])
+	if(PPU_Reg[0]&PPU_WINDOW_ENABLE && (PPU_Reg[0xB]) <= ppuDots+7 && PPU_Reg[0xA] <= ppuLines)
 	{
 		uint8_t windowXPos = ppuDots+7-PPU_Reg[0xB];
-		uint8_t windowYPos = PPU_Reg[4]-PPU_Reg[0xA];
+		uint8_t windowYPos = ppuLines-PPU_Reg[0xA];
 		vramTilePos = ((PPU_Reg[0]&PPU_WINDOW_TILEMAP_UP)?0x1C00:0x1800)|(((windowXPos>>3)+((windowYPos>>3)<<5))&0x3FF);
 		tCgbVal = PPU_VRAM[0x2000|(vramTilePos&0x1FFF)];
 		tCgbBank = (tCgbVal&PPU_TILE_CGB_BANK)?0x2000:0x0;

@@ -16,14 +16,19 @@
 #include "input.h"
 #include "mbc.h"
 
-static uint8_t Ext_Mem[0x20000];
+//used externally
+extern uint8_t Ext_Mem[0x20000];
 static uint8_t Main_Mem[0x8000];
 static uint8_t High_Mem[0x80];
 static uint8_t gbs_prevValReads[8];
 static uint8_t memLastVal;
+static uint8_t irReq;
+static uint8_t serialReg;
+static uint8_t serialCtrlReg;
 static uint8_t irqEnableReg;
 static uint8_t irqFlagsReg;
-
+//writable, undocumented regs
+static uint8_t genericReg[4];
 static uint8_t divRegVal;
 static uint8_t divRegClock;
 static uint8_t timerReg;
@@ -51,7 +56,7 @@ extern uint16_t cBank;
 extern uint16_t extBank;
 extern uint16_t bankMask;
 extern uint16_t extMask;
-extern uint16_t extTotalMask;
+extern uint16_t extAddrMask;
 extern size_t extTotalSize;
 
 //from cpu.c
@@ -61,9 +66,11 @@ extern bool cpuDoStopSwitch;
 //from ppu.c
 extern uint8_t ppuCgbBank;
 
-extern bool extMemUsed;
+//from mbc.c
+extern bool extMemEnabled;
 extern bool bankUsed;
 extern bool extSelect;
+extern bool rtcUsed;
 
 static get8FuncT memGet8ptr[0x10000];
 static set8FuncT memSet8ptr[0x10000];
@@ -73,13 +80,11 @@ static uint8_t memGetROMBank8(uint16_t addr);
 static uint8_t memGetROMNoBank8(uint16_t addr);
 static uint8_t memGetRAMBank8(uint16_t addr);
 static uint8_t memGetRAMNoBank8(uint16_t addr);
-static uint8_t memGetExtRAM8(uint16_t addr);
 static uint8_t memGetHiRAM8(uint16_t addr);
 static uint8_t memGetGeneralReg8(uint16_t addr);
 static uint8_t memGetInvalid8(uint16_t addr);
 static void memSetRAMBank8(uint16_t addr, uint8_t val);
 static void memSetRAMNoBank8(uint16_t addr, uint8_t val);
-static void memSetExtRAM8(uint16_t addr, uint8_t val);
 static void memSetHiRAM8(uint16_t addr, uint8_t val);
 static void memSetGeneralReg8(uint16_t addr, uint8_t val);
 static void memSetInvalid8(uint16_t addr, uint8_t val);
@@ -148,66 +153,83 @@ static void memSetBankVal()
 
 static void memSetExtVal()
 {
-	extMemUsed = true;
+	extAddrMask = 0x1FFF;
+	extMemEnabled = true;
 	switch(emuGBROM[0x149])
 	{
 		case 0:
-			printf("No RAM allowed\n");
-			extTotalSize = 0;
-			extTotalMask = 0;
-			extMask = 0;
+			if(emuGBROM[0x147] == 6)
+			{
+				printf("MBC2 Special RAM\n");
+				extAddrMask = 0x1FF; //special case
+				extTotalSize = 0x200;
+				extMask = 1;
+			}
+			else
+			{
+				printf("No RAM allowed\n");
+				extMemEnabled = false;
+				extAddrMask = 0; //special case
+				extTotalSize = 0;
+				extMask = 0;
+			}
+			break;
 		case 1:
 			printf("2KB RAM allowed\n");
+			extAddrMask = 0x7FF; //special case
 			extTotalSize = 0x800;
-			extTotalMask = 0x7FF;
 			extMask = 1;
 			break;
 		case 2:
 			printf("8KB RAM allowed\n");
 			extTotalSize = 0x2000;
-			extTotalMask = 0x1FFF;
 			extMask = 1;
 			break;
 		case 3:
 			printf("32KB RAM allowed\n");
 			extTotalSize = 0x8000;
-			extTotalMask = 0x1FFF;
 			extMask = 3;
 			break;
 		case 4:
 			printf("128KB RAM allowed\n");
 			extTotalSize = 0x20000;
-			extTotalMask = 0x1FFF;
 			extMask = 15;
 			break;
 		case 5:
 			printf("64KB RAM allowed\n");
 			extTotalSize = 0x10000;
-			extTotalMask = 0x1FFF;
 			extMask = 7;
 			break;
 		default:
 			printf("Unknown RAM Size, allowing 8KB RAM\n");
-			extTotalMask = 0x1FFF;
+			extTotalSize = 0x2000;
 			extMask = 1;
 			break;
 	}
 }
+
 static uint8_t curGBS = 0;
 extern uint8_t gbsTracksTotal;
 bool memInit(bool romcheck, bool gbs)
 {
 	if(romcheck)
 	{
+		cBank = 1;
+		extBank = 0;
+		extMask = 0;
+		extAddrMask = 0;
+		extTotalSize = 0;
+		bankUsed = false;
+		extMemEnabled = false;
+		rtcUsed = false;
 		if(gbs)
 		{
 			printf("GBS Mode\n");
 			mbcInit(MBC_TYPE_GBS);
 			bankUsed = true;
-			extMemUsed = true;
+			extMemEnabled = true;
 			printf("8KB RAM allowed\n");
 			extTotalSize = 0x2000;
-			extTotalMask = 0x1FFF;
 			extMask = 1;
 			memset(gbs_prevValReads,0,8);
 		}
@@ -218,57 +240,90 @@ bool memInit(bool romcheck, bool gbs)
 				case 0x00:
 					printf("ROM Only\n");
 					mbcInit(MBC_TYPE_NONE);
-					bankUsed = false;
-					extMemUsed = false;
 					break;
 				case 0x01:
+					memSetBankVal();
 					printf("ROM Only (MBC1)\n");
 					mbcInit(MBC_TYPE_1);
-					memSetBankVal();
-					extMemUsed = false;
 					break;
 				case 0x02:
+					memSetBankVal();
+					memSetExtVal();
 					printf("ROM and RAM (without save) (MBC1)\n");
 					mbcInit(MBC_TYPE_1);
+					break;
+				case 0xFF:
+					//TODO: Actually implement HuC1 functionality
+				case 0x03:
 					memSetBankVal();
 					memSetExtVal();
-					break;
-				case 0x03:
 					printf("ROM and RAM (with save) (MBC1)\n");
 					mbcInit(MBC_TYPE_1);
+					memLoadSave();
+					break;
+				case 0x05:
+					memSetBankVal();
+					printf("ROM only (MBC2)\n");
+					mbcInit(MBC_TYPE_1);
+					break;
+				case 0x06:
 					memSetBankVal();
 					memSetExtVal();
+					printf("ROM and RAM (with save) (MBC2)\n");
+					mbcInit(MBC_TYPE_2);
+					memLoadSave();
+					break;
+				case 0x08:
+					memSetBankVal();
+					memSetExtVal();
+					printf("ROM and RAM (without save)\n");
+					mbcInit(MBC_TYPE_NONE);
+					break;
+				case 0x09:
+					memSetBankVal();
+					memSetExtVal();
+					printf("ROM and RAM (with save)\n");
+					mbcInit(MBC_TYPE_NONE);
 					memLoadSave();
 					break;
 				case 0x0F:
-					//TODO: RTC Support
+					memSetBankVal();
+					mbcRTCInit();
+					printf("ROM and RTC (MBC3)\n");
+					mbcInit(MBC_TYPE_3);
+					memLoadSave();
+					break;
 				case 0x11:
+					memSetBankVal();
 					printf("ROM Only (MBC3)\n");
 					mbcInit(MBC_TYPE_3);
-					memSetBankVal();
-					extMemUsed = false;
 					break;
 				case 0x12:
+					memSetBankVal();
+					memSetExtVal();
 					printf("ROM and RAM (without save) (MBC3)\n");
 					mbcInit(MBC_TYPE_3);
-					memSetBankVal();
-					memSetExtVal();
 					break;
 				case 0x10:
-					//TODO: RTC Support
-				case 0x13:
-					printf("ROM and RAM (with save) (MBC3)\n");
-					mbcInit(MBC_TYPE_3);
 					memSetBankVal();
 					memSetExtVal();
+					mbcRTCInit();
+					printf("ROM and RAM (with save) and RTC (MBC3)\n");
+					mbcInit(MBC_TYPE_3);
+					memLoadSave();
+					break;
+				case 0x13:
+					memSetBankVal();
+					memSetExtVal();
+					printf("ROM and RAM (with save) (MBC3)\n");
+					mbcInit(MBC_TYPE_3);
 					memLoadSave();
 					break;
 				case 0x19:
 				case 0x1C:
+					memSetBankVal();
 					printf("ROM Only (MBC5)\n");
 					mbcInit(MBC_TYPE_5);
-					memSetBankVal();
-					extMemUsed = false;
 					break;
 				case 0x1A:
 				case 0x1D:
@@ -293,7 +348,11 @@ bool memInit(bool romcheck, bool gbs)
 	}
 	memset(Main_Mem,0,0x8000);
 	memset(High_Mem,0,0x80);
+	memset(genericReg,0,4);
 	memLastVal = 0;
+	irReq = 0;
+	serialReg = 0;
+	serialCtrlReg = 0;
 	irqEnableReg = 0;
 	irqFlagsReg = 0;
 	divRegVal = 0;
@@ -334,8 +393,8 @@ bool memInit(bool romcheck, bool gbs)
 		}
 		else if(addr < 0xC000) //Cardridge RAM
 		{
-			memGet8ptr[addr] = extMemUsed?memGetExtRAM8:memGetInvalid8;
-			memSet8ptr[addr] = extMemUsed?memSetExtRAM8:memSetInvalid8;
+			memGet8ptr[addr] = mbcGetRAM8;
+			memSet8ptr[addr] = mbcSetRAM8;
 		}
 		else if(addr < 0xD000) //Main RAM
 		{
@@ -399,8 +458,8 @@ bool memInit(bool romcheck, bool gbs)
 		}
 		else if(addr < 0xFF80) //General CGB Features
 		{
-			memGet8ptr[addr] = allowCgbRegs?memGetGeneralReg8:memGetInvalid8;
-			memSet8ptr[addr] = allowCgbRegs?memSetGeneralReg8:memSetInvalid8;
+			memGet8ptr[addr] = memGetGeneralReg8;
+			memSet8ptr[addr] = memSetGeneralReg8;
 		}
 		else if(addr < 0xFFFF) //High RAM
 		{
@@ -470,20 +529,20 @@ static uint8_t memGetRAMNoBank8(uint16_t addr)
 	return Main_Mem[addr&0x1FFF];
 }
 
-static uint8_t memGetExtRAM8(uint16_t addr)
-{
-	return Ext_Mem[((extBank<<13)+(addr&0x1FFF))&extTotalMask];
-}
-
 static uint8_t memGetHiRAM8(uint16_t addr)
 {
 	return High_Mem[addr&0x7F];
 }
 
+extern uint8_t curP1Out, curP2Out, curWavOut, curNoiseOut;
 static uint8_t memGetGeneralReg8(uint16_t addr)
 {
 	switch(addr&0xFF)
 	{
+		case 0x01:
+			return serialReg;
+		case 0x02:
+			return serialCtrlReg|0x7E;
 		case 0x04:
 			return divRegVal;
 		case 0x05:
@@ -491,11 +550,11 @@ static uint8_t memGetGeneralReg8(uint16_t addr)
 		case 0x06:
 			return timerResetVal;
 		case 0x07:
-			return timerReg;
+			return timerReg|0xF8;
 		case 0x0F:
 			return irqFlagsReg|0xE0;
 		case 0x4D:
-			return (cpuDoStopSwitch | (cpuCgbSpeed<<7));
+			return (cpuDoStopSwitch | (cpuCgbSpeed<<7)) | 0x7E;
 		case 0x4F:
 			return ppuCgbBank;
 		case 0x51:
@@ -512,8 +571,24 @@ static uint8_t memGetGeneralReg8(uint16_t addr)
 				return (0x80|(cgbDmaLen-1));
 			else
 				return cgbDmaLen-1;
+		case 0x56:
+			return irReq|0x3C;
+		case 0x6C:
+			return (!(allowCgbRegs))|0xFE;
 		case 0x70:
-			return cgbMainBank;
+			return (allowCgbRegs)?(cgbMainBank|0xF8):0xFF;
+		case 0x72:
+			return genericReg[0];
+		case 0x73:
+			return genericReg[1];
+		case 0x74:
+			return (allowCgbRegs)?genericReg[2]:0xFF;
+		case 0x75:
+			return genericReg[3]|0x8F;
+		case 0x76:
+			return curP1Out|(curP2Out<<4);
+		case 0x77:
+			return curWavOut|(curNoiseOut<<4);
 		case 0xFF:
 			return irqEnableReg|0xE0;
 		default:
@@ -543,11 +618,6 @@ static void memSetRAMNoBank8(uint16_t addr, uint8_t val)
 	Main_Mem[addr&0x1FFF] = val;
 }
 
-static void memSetExtRAM8(uint16_t addr, uint8_t val)
-{
-	Ext_Mem[((extBank<<13)+(addr&0x1FFF))&extTotalMask] = val;
-}
-
 static void memSetHiRAM8(uint16_t addr, uint8_t val)
 {
 	High_Mem[addr&0x7F] = val;
@@ -557,6 +627,10 @@ static void memSetGeneralReg8(uint16_t addr, uint8_t val)
 {
 	switch(addr&0xFF)
 	{
+		case 0x01:
+			serialReg = val;
+		case 0x02:
+			serialCtrlReg = val;
 		case 0x04:
 			divRegVal = 0; //writing any val resets to 0
 			break;
@@ -615,10 +689,28 @@ static void memSetGeneralReg8(uint16_t addr, uint8_t val)
 				memDmaClockTimers();
 			}
 			break;
+		case 0x56:
+			irReq = val;
 		case 0x70:
-			cgbMainBank = (val&7);
-			if(cgbMainBank == 0)
-				cgbMainBank = 1;
+			if(allowCgbRegs)
+			{
+				cgbMainBank = (val&7);
+				if(cgbMainBank == 0)
+					cgbMainBank = 1;
+			}
+			break;
+		case 0x72:
+			genericReg[0] = val;
+			break;
+		case 0x73:
+			genericReg[1] = val;
+			break;
+		case 0x74:
+			if(allowCgbRegs)
+				genericReg[2] = val;
+			break;
+		case 0x75:
+			genericReg[3] = val;
 			break;
 		case 0xFF:
 			irqEnableReg = val&0x1F;
@@ -658,7 +750,7 @@ void memDumpMainMem()
 extern char *emuSaveName;
 void memLoadSave()
 {
-	if(emuSaveName && extTotalSize)
+	if(emuSaveName && (extTotalSize || rtcUsed))
 	{
 		emuSaveEnabled = true;
 		FILE *save = fopen(emuSaveName, "rb");
@@ -666,13 +758,15 @@ void memLoadSave()
 		{
 			fseek(save,0,SEEK_END);
 			size_t saveSize = ftell(save);
-			if(saveSize == extTotalSize)
+			if(extTotalSize && (saveSize >= extTotalSize))
 			{
 				rewind(save);
-				fread(Ext_Mem,1,saveSize,save);
+				mbcExtRAMLoad(save);
+				saveSize -= extTotalSize;
 			}
-			else
-				printf("Save file ignored\n");
+			if(rtcUsed && (saveSize >= mbcRTCSize()))
+				mbcRTCLoad(save);
+			printf("Done reading %s\n", emuSaveName);
 			fclose(save);
 		}
 	}
@@ -680,12 +774,15 @@ void memLoadSave()
 
 void memSaveGame()
 {
-	if(emuSaveName && extMask && emuSaveEnabled)
+	if(emuSaveName && ((emuSaveEnabled && extTotalSize) || rtcUsed))
 	{
 		FILE *save = fopen(emuSaveName, "wb");
 		if(save)
 		{
-			fwrite(Ext_Mem,1,extTotalSize,save);
+			if(emuSaveEnabled && extTotalSize)
+				mbcExtRAMStore(save);
+			if(rtcUsed)
+				mbcRTCStore(save);
 			fclose(save);
 		}
 	}

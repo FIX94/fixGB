@@ -13,7 +13,6 @@ enum {
 	MBC_TYPE_1,
 	MBC_TYPE_2,
 	MBC_TYPE_3,
-	MBC_TYPE_4,
 	MBC_TYPE_5,
 	MBC_TYPE_6,
 	MBC_TYPE_7,
@@ -21,7 +20,15 @@ enum {
 };
 
 void mbcInit(uint8_t type);
-
+size_t mbcRTCSize();
+void mbcRTCInit();
+void mbcRTCLoad(FILE *f);
+void mbcRTCStore(FILE *f);
+void mbcExtRAMInit();
+void mbcExtRAMLoad(FILE *f);
+void mbcExtRAMStore(FILE *f);
 extern set8FuncT mbcSet8;
+extern set8FuncT mbcSetRAM8;
+extern get8FuncT mbcGetRAM8;
 
 #endif

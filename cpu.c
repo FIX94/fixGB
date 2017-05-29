@@ -45,8 +45,10 @@ static bool cpuHaltLoop,cpuStopLoop,cpuHaltBug;
 void cpuInit()
 {
 	sub_in_val=0,cpuTmp=0,cpuTmp16=0;
-	//From GB Bootrom
-	a=0x01|(allowCgbRegs<<4),b=0,c=0x13,d=0,e=0xD8,f=0xB0,h=1,l=0x4D;
+	if(allowCgbRegs) //From GBC Bootrom
+		a=0x11,b=0,c=0,d=0,e=0x08,f=0x80,h=0,l=0x7C;
+	else //From GB Bootrom
+		a=0x01,b=0,c=0x13,d=0,e=0xD8,f=0xB0,h=1,l=0x4D;
 	sp = 0xFFFE; //Boot Stack Pointer
 	pc = 0x0100; //hardcoded ROM entrypoint
 	irqEnable = false;
@@ -598,7 +600,7 @@ void cpuDAA(uint8_t *reg)
 static void cpuSTOP(uint8_t *none)
 {
 	(void)none;
-	printf("CPU called STOP instruction\n");
+	//printf("CPU called STOP instruction\n");
 	if(cpuDoStopSwitch)
 	{
 		cpuSetSpeed(!cpuCgbSpeed);
@@ -1616,13 +1618,13 @@ void cpuSetSpeed(bool cgb)
 {
 	if(cgb)
 	{
-		printf("CPU: CGB Speed\n");
+		//printf("CPU: CGB Speed\n");
 		cpuCgbSpeed = true;
 		cpuTimer = 1;
 	}
 	else
 	{
-		printf("CPU: DMG Speed\n");
+		//printf("CPU: DMG Speed\n");
 		cpuCgbSpeed = false;
 		cpuTimer = 3;
 	}

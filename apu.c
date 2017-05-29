@@ -15,15 +15,24 @@
 #include "mem.h"
 #include "cpu.h"
 
-#define P1_ENABLE (1<<0)
-#define P2_ENABLE (1<<1)
-#define WAV_ENABLE (1<<2)
-#define NOISE_ENABLE (1<<3)
+#define P1_ENABLE_LEFT (1<<0)
+#define P2_ENABLE_LEFT (1<<1)
+#define WAV_ENABLE_LEFT (1<<2)
+#define NOISE_ENABLE_LEFT (1<<3)
+
+#define P1_ENABLE_RIGHT (1<<4)
+#define P2_ENABLE_RIGHT (1<<5)
+#define WAV_ENABLE_RIGHT (1<<6)
+#define NOISE_ENABLE_RIGHT (1<<7)
 
 static uint8_t APU_IO_Reg[0x50];
 
 static float lpVal;
 static float hpVal;
+static const float volLevel[8] = {
+	0.125f, 0.25f, 0.375f, 0.5f, 0.625f, 0.75f, 0.875f, 1.0f, 
+};
+
 static float *apuOutBuf;
 static uint32_t apuBufSize;
 static uint32_t apuBufSizeBytes;
@@ -156,12 +165,16 @@ void apuInit()
 	noiseMode1 = false;
 	//GB Bootrom
 	soundEnabled = true;
-	APU_IO_Reg[0x25] = 0x77;
+	APU_IO_Reg[0x24] = 0x77;
+	APU_IO_Reg[0x25] = 0xF3;
 }
 
-static float lastHPOut[2] = { 0, 0 }, lastLPOut[2] = { 0, 0 };
-static uint8_t lastP1Out[2] = { 0, 0 }, lastP2Out[2] = { 0, 0 }, lastwavOut[2] = { 0, 0 }, lastNoiseOut[2] = { 0, 0 };
+static float lastHPOutLeft = 0, lastHPOutRight = 0, lastLPOutLeft = 0, lastLPOutRight = 0;
+static uint8_t lastP1OutLeft = 0, lastP2OutLeft = 0, lastWavOutLeft = 0, lastNoiseOutLeft = 0;
+static uint8_t lastP1OutRight = 0, lastP2OutRight = 0, lastWavOutRight = 0, lastNoiseOutRight = 0;
 extern bool emuSkipVsync, emuSkipFrame;
+//used externally
+uint8_t curP1Out = 0, curP2Out = 0, curWavOut = 0, curNoiseOut = 0;
 
 bool apuCycle()
 {
@@ -189,55 +202,119 @@ bool apuCycle()
 		}
 		curBufPos = 0;
 	}
-	uint8_t apuCurChan;
-	for(apuCurChan = 0; apuCurChan < 2; apuCurChan++)
+	uint8_t p1OutLeft = lastP1OutLeft, p2OutLeft = lastP2OutLeft, 
+		wavOutLeft = lastWavOutLeft, noiseOutLeft = lastNoiseOutLeft;
+	uint8_t p1OutRight = lastP1OutRight, p2OutRight = lastP2OutRight, 
+		wavOutRight = lastWavOutRight, noiseOutRight = lastNoiseOutRight;
+	uint8_t apuMasterVolLeft = ((APU_IO_Reg[0x24]>>4)&7), apuMasterVolRight = (APU_IO_Reg[0x24]&7);
+	if(p1enable && p1dacenable)
 	{
-		uint8_t p1Out = lastP1Out[apuCurChan], p2Out = lastP2Out[apuCurChan], 
-			wavOut = lastwavOut[apuCurChan], noiseOut = lastNoiseOut[apuCurChan];
-		uint8_t apuEnableReg = (apuCurChan==0)?(APU_IO_Reg[0x25]>>4):(APU_IO_Reg[0x25]&0xF);
-		if(p1enable && p1dacenable && (apuEnableReg & P1_ENABLE))
+		if(p1seq[p1Cycle] && freq1 > 0 && freq1 <= 0x7FF)
 		{
-			if(p1seq[p1Cycle] && freq1 > 0 && freq1 <= 0x7FF)
-				lastP1Out[apuCurChan] = p1Out = p1Env.curVol;
-			else
-				p1Out = 0;
+			curP1Out = p1Env.curVol;
+			if(APU_IO_Reg[0x25] & P1_ENABLE_LEFT)
+				lastP1OutLeft = p1OutLeft = curP1Out;
+			if(APU_IO_Reg[0x25] & P1_ENABLE_RIGHT)
+				lastP1OutRight = p1OutRight = curP1Out;
 		}
-		if(p2enable && p2dacenable && (apuEnableReg & P2_ENABLE))
+		else
 		{
-			if(p2seq[p2Cycle] && freq2 > 0 && freq2 <= 0x7FF)
-				lastP2Out[apuCurChan] = p2Out = p2Env.curVol;
-			else
-				p2Out = 0;
+			curP1Out = 0;
+			if(APU_IO_Reg[0x25] & P1_ENABLE_LEFT)
+				p1OutLeft = 0;
+			if(APU_IO_Reg[0x25] & P1_ENABLE_RIGHT)
+				p1OutRight = 0;
 		}
-		if(wavenable && wavdacenable && (apuEnableReg & WAV_ENABLE))
-		{
-			uint8_t v = APU_IO_Reg[0x30+(wavCycle>>1)];
-			if((wavCycle&1)==0)
-				v >>= 4; 
-			else
-				v &= 0xF;
-			v>>=wavVolShift;
-			if(v)// && wavFreq >= 2)
-				lastwavOut[apuCurChan] = wavOut = v;
-			else
-				wavOut = 0;
-		}
-		if(noiseenable && noisedacenable && (apuEnableReg & NOISE_ENABLE))
-		{
-			if((noiseShiftReg&1) == 0 && noiseFreq > 0)
-				lastNoiseOut[apuCurChan] = noiseOut = noiseEnv.curVol;
-			else
-				noiseOut = 0;
-		}
-		float curIn = ((float)(p1Out + p2Out + wavOut + noiseOut))/60.f;
-		float curLPout = lastLPOut[apuCurChan]+(lpVal*(curIn-lastLPOut[apuCurChan]));
-		float curHPOut = hpVal*(lastHPOut[apuCurChan]+curLPout-curIn);
-		//set output
-		apuOutBuf[curBufPos] = ((soundEnabled)?(curHPOut):0);
-		lastLPOut[apuCurChan] = curLPout;
-		lastHPOut[apuCurChan] = curHPOut;
-		curBufPos++;
 	}
+	else
+		curP1Out = 0;
+	if(p2enable && p2dacenable)
+	{
+		if(p2seq[p2Cycle] && freq2 > 0 && freq2 <= 0x7FF)
+		{
+			curP2Out = p2Env.curVol;
+			if(APU_IO_Reg[0x25] & P2_ENABLE_LEFT)
+				lastP2OutLeft = p2OutLeft = curP2Out;
+			if(APU_IO_Reg[0x25] & P2_ENABLE_RIGHT)
+				lastP2OutRight = p2OutRight = curP2Out;
+		}
+		else
+		{
+			curP2Out = 0;
+			if(APU_IO_Reg[0x25] & P2_ENABLE_LEFT)
+				p2OutLeft = 0;
+			if(APU_IO_Reg[0x25] & P2_ENABLE_RIGHT)
+				p2OutRight = 0;
+		}
+	}
+	else
+		curP2Out = 0;
+	if(wavenable && wavdacenable)
+	{
+		uint8_t v = APU_IO_Reg[0x30+(wavCycle>>1)];
+		if((wavCycle&1)==0)
+			v >>= 4; 
+		else
+			v &= 0xF;
+		v>>=wavVolShift;
+		if(v)// && wavFreq >= 2)
+		{
+			curWavOut = v;
+			if(APU_IO_Reg[0x25] & WAV_ENABLE_LEFT)
+				lastWavOutLeft = wavOutLeft = curWavOut;
+			if(APU_IO_Reg[0x25] & WAV_ENABLE_RIGHT)
+				lastWavOutRight = wavOutRight = curWavOut;
+		}
+		else
+		{
+			curWavOut = 0;
+			if(APU_IO_Reg[0x25] & WAV_ENABLE_LEFT)
+				wavOutLeft = 0;
+			if(APU_IO_Reg[0x25] & WAV_ENABLE_RIGHT)
+				wavOutRight = 0;
+		}
+	}
+	else
+		curWavOut = 0;
+	if(noiseenable && noisedacenable)
+	{
+		if((noiseShiftReg&1) == 0 && noiseFreq > 0)
+		{
+			curNoiseOut = noiseEnv.curVol;
+			if(APU_IO_Reg[0x25] & NOISE_ENABLE_LEFT)
+				lastNoiseOutLeft = noiseOutLeft = curNoiseOut;
+			if(APU_IO_Reg[0x25] & NOISE_ENABLE_RIGHT)
+				lastNoiseOutRight = noiseOutRight = curNoiseOut;
+		}
+		else
+		{
+			curNoiseOut = 0;
+			if(APU_IO_Reg[0x25] & NOISE_ENABLE_LEFT)
+				noiseOutLeft = 0;
+			if(APU_IO_Reg[0x25] & NOISE_ENABLE_RIGHT)
+				noiseOutRight = 0;
+		}
+	}
+	else
+		curNoiseOut = 0;
+	//gen output Left
+	float curInLeft = ((float)(p1OutLeft + p2OutLeft + wavOutLeft + noiseOutLeft))*volLevel[apuMasterVolLeft]/60.f;
+	float curLPOutLeft = lastLPOutLeft+(lpVal*(curInLeft-lastLPOutLeft));
+	float curHPOutLeft = hpVal*(lastHPOutLeft+curLPOutLeft-curInLeft);
+	//gen output Right
+	float curInRight = ((float)(p1OutRight + p2OutRight + wavOutRight + noiseOutRight))*volLevel[apuMasterVolRight]/60.f;
+	float curLPOutRight = lastLPOutRight+(lpVal*(curInRight-lastLPOutRight));
+	float curHPOutRight = hpVal*(lastHPOutRight+curLPOutRight-curInRight);
+	//set output Left
+	apuOutBuf[curBufPos++] = ((soundEnabled)?(curHPOutLeft):0);
+	//set output Right
+	apuOutBuf[curBufPos++] = ((soundEnabled)?(curHPOutRight):0);
+	//save HP and LP Left
+	lastLPOutLeft = curLPOutLeft;
+	lastHPOutLeft = curHPOutLeft;
+	//save HP and LP Right
+	lastLPOutRight = curLPOutRight;
+	lastHPOutRight = curHPOutRight;
 	return true;
 }
 
