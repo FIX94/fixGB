@@ -15,15 +15,17 @@
 #include "mem.h"
 #include "cpu.h"
 
-#define P1_ENABLE_LEFT (1<<0)
-#define P2_ENABLE_LEFT (1<<1)
-#define WAV_ENABLE_LEFT (1<<2)
-#define NOISE_ENABLE_LEFT (1<<3)
+//Upper bits of FF25 are Left
+#define P1_ENABLE_LEFT (1<<4)
+#define P2_ENABLE_LEFT (1<<5)
+#define WAV_ENABLE_LEFT (1<<6)
+#define NOISE_ENABLE_LEFT (1<<7)
 
-#define P1_ENABLE_RIGHT (1<<4)
-#define P2_ENABLE_RIGHT (1<<5)
-#define WAV_ENABLE_RIGHT (1<<6)
-#define NOISE_ENABLE_RIGHT (1<<7)
+//Lower bits of FF25 are Right
+#define P1_ENABLE_RIGHT (1<<0)
+#define P2_ENABLE_RIGHT (1<<1)
+#define WAV_ENABLE_RIGHT (1<<2)
+#define NOISE_ENABLE_RIGHT (1<<3)
 
 static uint8_t APU_IO_Reg[0x50];
 
