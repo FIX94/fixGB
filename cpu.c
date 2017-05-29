@@ -1654,7 +1654,7 @@ void cpuLoadGBS(uint8_t song)
 	ppuInit();
 	apuInit();
 	inputInit();
-	memInit(false,false);
+	memInit(false,true);
 	memSet8(0xFF06,gbsTMA);
 	memSet8(0xFF07,gbsTAC);
 	//set requested sp

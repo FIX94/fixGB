@@ -29,13 +29,10 @@
 
 static uint8_t APU_IO_Reg[0x50];
 
-static float lpVal;
-static float hpVal;
-static const float volLevel[8] = {
-	0.125f, 0.25f, 0.375f, 0.5f, 0.625f, 0.75f, 0.875f, 1.0f, 
-};
+static int32_t lpVal;
+static int32_t hpVal;
 
-static float *apuOutBuf;
+static int16_t *apuOutBuf;
 static uint32_t apuBufSize;
 static uint32_t apuBufSizeBytes;
 static uint32_t curBufPos;
@@ -114,15 +111,17 @@ void apuInitBufs()
 	double dt = 1.0/((double)apuFrequency);
 	//LP at 22kHz
 	double rc = 1.0/(M_2_PI * 22000.0);
-	lpVal = dt / (rc + dt);
+	//convert to 32bit int for calcs later
+	lpVal = (int32_t)((dt / (rc + dt))*65536.0);
 	//HP at 40Hz
 	rc = 1.0/(M_2_PI * 40.0);
-	hpVal = rc / (rc + dt);
+	//convert to 32bit int for calcs later
+	hpVal = (int32_t)((rc / (rc + dt))*65536.0);
 
 	apuBufSize = apuFrequency/60*2;
-	apuBufSizeBytes = apuBufSize*sizeof(float);
+	apuBufSizeBytes = apuBufSize*sizeof(int16_t);
 
-	apuOutBuf = (float*)malloc(apuBufSizeBytes);
+	apuOutBuf = (int16_t*)malloc(apuBufSizeBytes);
 }
 
 void apuDeinitBufs()
@@ -171,7 +170,7 @@ void apuInit()
 	APU_IO_Reg[0x25] = 0xF3;
 }
 
-static float lastHPOutLeft = 0, lastHPOutRight = 0, lastLPOutLeft = 0, lastLPOutRight = 0;
+static int32_t lastHPOutLeft = 0, lastHPOutRight = 0, lastLPOutLeft = 0, lastLPOutRight = 0;
 static uint8_t lastP1OutLeft = 0, lastP2OutLeft = 0, lastWavOutLeft = 0, lastNoiseOutLeft = 0;
 static uint8_t lastP1OutRight = 0, lastP2OutRight = 0, lastWavOutRight = 0, lastNoiseOutRight = 0;
 extern bool emuSkipVsync, emuSkipFrame;
@@ -211,7 +210,7 @@ bool apuCycle()
 	uint8_t apuMasterVolLeft = ((APU_IO_Reg[0x24]>>4)&7), apuMasterVolRight = (APU_IO_Reg[0x24]&7);
 	if(p1enable && p1dacenable)
 	{
-		if(p1seq[p1Cycle] && freq1 > 0 && freq1 <= 0x7FF)
+		if(p1seq[p1Cycle] && freq1 > 0 && freq1 < 0x7FF)
 		{
 			curP1Out = p1Env.curVol;
 			if(APU_IO_Reg[0x25] & P1_ENABLE_LEFT)
@@ -232,7 +231,7 @@ bool apuCycle()
 		curP1Out = 0;
 	if(p2enable && p2dacenable)
 	{
-		if(p2seq[p2Cycle] && freq2 > 0 && freq2 <= 0x7FF)
+		if(p2seq[p2Cycle] && freq2 > 0 && freq2 < 0x7FF)
 		{
 			curP2Out = p2Env.curVol;
 			if(APU_IO_Reg[0x25] & P2_ENABLE_LEFT)
@@ -259,7 +258,7 @@ bool apuCycle()
 		else
 			v &= 0xF;
 		v>>=wavVolShift;
-		if(v)// && wavFreq >= 2)
+		if(v && wavFreq > 0 && wavFreq < 0x7FF)
 		{
 			curWavOut = v;
 			if(APU_IO_Reg[0x25] & WAV_ENABLE_LEFT)
@@ -300,13 +299,13 @@ bool apuCycle()
 	else
 		curNoiseOut = 0;
 	//gen output Left
-	float curInLeft = ((float)(p1OutLeft + p2OutLeft + wavOutLeft + noiseOutLeft))*volLevel[apuMasterVolLeft]/60.f;
-	float curLPOutLeft = lastLPOutLeft+(lpVal*(curInLeft-lastLPOutLeft));
-	float curHPOutLeft = hpVal*(lastHPOutLeft+curLPOutLeft-curInLeft);
+	int32_t curInLeft = ((p1OutLeft + p2OutLeft + wavOutLeft + noiseOutLeft))*(apuMasterVolLeft+1)<<7;
+	int32_t curLPOutLeft = lastLPOutLeft+((lpVal*(curInLeft-lastLPOutLeft))>>16);
+	int32_t curHPOutLeft = (hpVal*(lastHPOutLeft+lastLPOutLeft-curLPOutLeft))>>16;
 	//gen output Right
-	float curInRight = ((float)(p1OutRight + p2OutRight + wavOutRight + noiseOutRight))*volLevel[apuMasterVolRight]/60.f;
-	float curLPOutRight = lastLPOutRight+(lpVal*(curInRight-lastLPOutRight));
-	float curHPOutRight = hpVal*(lastHPOutRight+curLPOutRight-curInRight);
+	int32_t curInRight = ((p1OutRight + p2OutRight + wavOutRight + noiseOutRight))*(apuMasterVolRight+1)<<7;
+	int32_t curLPOutRight = lastLPOutRight+((lpVal*(curInRight-lastLPOutRight))>>16);
+	int32_t curHPOutRight = (hpVal*(lastHPOutRight+lastLPOutRight-curLPOutRight))>>16;
 	//set output Left
 	apuOutBuf[curBufPos++] = ((soundEnabled)?(curHPOutLeft):0);
 	//set output Right
@@ -588,6 +587,7 @@ void apuSetReg8(uint16_t addr, uint8_t val)
 			break;
 		case 0x13:
 			freq1 = ((freq1&~0xFF) | val);
+			//printf("P1 new freq %04x\n", freq1);
 			break;
 		case 0x14:
 			p1prevhaltloop = p1haltloop;
@@ -654,6 +654,7 @@ void apuSetReg8(uint16_t addr, uint8_t val)
 			break;
 		case 0x18:
 			freq2 = ((freq2&~0xFF) | val);
+			//printf("P2 new freq %04x\n", freq2);
 			break;
 		case 0x19:
 			p2prevhaltloop = p2haltloop;
@@ -719,8 +720,8 @@ void apuSetReg8(uint16_t addr, uint8_t val)
 			}
 			break;
 		case 0x1D:
-			//printf("wav time low %02x\n", val);
 			wavFreq = ((wavFreq&~0xFF) | val);
+			//printf("wav new freq %04x\n", wavFreq);
 			break;
 		case 0x1E:
 			wavprevhaltloop = wavhaltloop;

@@ -26,7 +26,7 @@
 #define DEBUG_KEY 0
 #define DEBUG_LOAD_INFO 1
 
-static const char *VERSION_STRING = "fixGB Alpha v0.5.1";
+static const char *VERSION_STRING = "fixGB Alpha v0.5.2";
 
 static void gbEmuDisplayFrame(void);
 static void gbEmuMainLoop(void);
@@ -48,6 +48,7 @@ bool gbsTimerMode = false;
 uint16_t gbsLoadAddr = 0;
 uint16_t gbsInitAddr = 0;
 uint16_t gbsPlayAddr = 0;
+uint32_t gbsRomSize = 0;
 uint16_t gbsSP = 0;
 uint8_t gbsTracksTotal = 0, gbsTMA = 0, gbsTAC = 0;
 uint8_t cpuTimer = 3;
@@ -102,23 +103,12 @@ int main(int argc, char** argv)
 		gbsPlayAddr = (tmpROM[0xA])|(tmpROM[0xB]<<8);
 		gbsSP = (tmpROM[0xC])|(tmpROM[0xD]<<8);
 		//should give more than enough room for everything
-		uint32_t totalROMsize = (fsize-0x70+gbsLoadAddr+0x7FFF)&(~0x7FFF);
-		emuGBROM = malloc(totalROMsize);
-		memset(emuGBROM,0xFF,totalROMsize);
+		gbsRomSize = (fsize-0x70+gbsLoadAddr+0x7FFF)&(~0x7FFF);
+		emuGBROM = malloc(gbsRomSize);
+		memset(emuGBROM,0xFF,gbsRomSize);
 		memcpy(emuGBROM+gbsLoadAddr,tmpROM+0x70,fsize-0x70);
-		memInit(true,true);
 		gbsTMA = tmpROM[0xE];
 		gbsTAC = tmpROM[0xF];
-		if(gbsTAC&4)
-		{
-			printf("Play Timing: Timer\n");
-			gbsTimerMode = true;
-		}
-		else
-		{
-			printf("Play Timing: VSync\n");
-			gbsTimerMode = false;
-		}
 		if(gbsTAC&0x80)
 		{
 			cpuSetSpeed(true);
@@ -129,9 +119,22 @@ int main(int argc, char** argv)
 			cpuSetSpeed(false);
 			allowCgbRegs = false;
 		}
+		printf("Main: CGB Regs are %sallowed\n", allowCgbRegs?"":"dis");
+		if(gbsTAC&4)
+		{
+			printf("Main: GBS Play Timing: Timer\n");
+			gbsTimerMode = true;
+		}
+		else
+		{
+			printf("Main: GBS Play Timing: VSync\n");
+			gbsTimerMode = false;
+		}
+		memInit(true,true);
 		if(tmpROM[0x10] != 0)
 			printf("Game: %.32s\n",(char*)(tmpROM+0x10));
 		free(tmpROM);
+		printf("Read in %s\n", argv[1]);
 		apuInitBufs();
 		//does all inits for us
 		memStartGBS();
@@ -148,7 +151,7 @@ int main(int argc, char** argv)
 		emuGBROM = malloc(fsize);
 		if(emuGBROM == NULL)
 		{
-			printf("Unable to allocate ROM space...\n");
+			printf("Main: Unable to allocate ROM space...\n");
 			exit(EXIT_SUCCESS);
 		}
 		fread(emuGBROM,1,fsize,gbF);
@@ -166,8 +169,8 @@ int main(int argc, char** argv)
 			memcpy(emuSaveName+strlen(argv[1])-2,"sav",4);
 		}
 		//Set CGB Regs allowed
-		allowCgbRegs = !!(emuGBROM[0x143]&0x80);
-		printf("CGB Regs are %sallowed\n", allowCgbRegs?"":"dis");
+		allowCgbRegs = (emuGBROM[0x143] == 0x80 || emuGBROM[0x143] == 0xC0);
+		printf("Main: CGB Regs are %sallowed\n", allowCgbRegs?"":"dis");
 		if(!memInit(true,false))
 		{
 			free(emuGBROM);
@@ -181,11 +184,9 @@ int main(int argc, char** argv)
 		ppuInit();
 		apuInit();
 		inputInit();
-		#if DEBUG_LOAD_INFO
+		if(emuGBROM[0x134] != 0)
+			printf("Game: %.11s\n", (char*)(emuGBROM+0x134));
 		printf("Read in %s\n", argv[1]);
-		//printf("Used Mapper: %i\n", mapper);
-		//printf("PRG: 0x%x bytes PRG RAM: 0x%x bytes CHR: 0x%x bytes\n", prgROMsize, emuPrgRAMsize, chrROMsize);
-		#endif
 	}
 	if(emuGBROM == NULL)
 		return EXIT_SUCCESS;

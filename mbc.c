@@ -65,6 +65,8 @@ static uint8_t mbcGetExtRAMRtc8(uint16_t addr);
 static void mbcSetExtRAMRtc8(uint16_t addr, uint8_t val);
 static uint8_t mbc2GetExtRAM8(uint16_t addr);
 static void mbc2SetExtRAM8(uint16_t addr, uint8_t val);
+static uint8_t mbcGetNoExtRAM8(uint16_t addr);
+static void mbcSetNoExtRAM8(uint16_t addr, uint8_t val);
 
 void mbcInit(uint8_t type)
 {
@@ -85,7 +87,7 @@ void mbcInit(uint8_t type)
 	{
 		mbcGetRAM8 = mbcGetExtRAMRtc8;
 		mbcSetRAM8 = mbcSetExtRAMRtc8;
-		printf("MBC Set RAM+RTC Functions\n");
+		printf("MBC: Set RAM+RTC Functions\n");
 	}
 	else if(extMemEnabled)
 	{
@@ -99,15 +101,22 @@ void mbcInit(uint8_t type)
 		{
 			mbcGetRAM8 = mbcGetExtRAMNoBank8;
 			mbcSetRAM8 = mbcSetExtRAMNoBank8;
-			printf("MBC Set RAM (No Bank) Functions\n");
+			printf("MBC: Set RAM (No Bank) Functions\n");
 		}
 		else
 		{
 			mbcGetRAM8 = mbcGetExtRAMBank8;
 			mbcSetRAM8 = mbcSetExtRAMBank8;
-			printf("MBC Set Normal RAM Functions\n");
+			printf("MBC: Set Normal RAM Functions\n");
 		}
 	}
+	else
+	{
+		mbcGetRAM8 = mbcGetNoExtRAM8;
+		mbcSetRAM8 = mbcSetNoExtRAM8;
+		printf("MBC: No RAM Functions\n");
+	}
+	mbcExtRAMInit(type);
 }
 
 static void noSet8(uint16_t addr, uint8_t val)
@@ -258,21 +267,45 @@ static void mbc5Set8(uint16_t addr, uint8_t val)
 static void gbsSet8(uint16_t addr, uint8_t val)
 {
 	if(addr >= 0x2000 && addr < 0x3000)
-		cBank = val;
+	{
+		//Some GBS files seem to follow VERY strange behaviour
+		//similar to the MBC1 but mixing in bank mask
+		cBank = (val&bankMask);
+		if(cBank == 0)
+			cBank |= 1;
+	}
 }
 
-void mbcExtRAMInit()
+void mbcExtRAMInit(uint8_t type)
 {
-	memset(Ext_Mem,0,0x20000);
+	if(extTotalSize == 0)
+		printf("MBC: No RAM Cleared\n");
+	else if(type == MBC_TYPE_2)
+	{
+		printf("MBC: Cleared MBC2 RAM\n");
+		memset(Ext_Mem,0xF0,0x200);
+	}
+	else
+	{
+		printf("MBC: Cleared Normal RAM\n");
+		memset(Ext_Mem,0,extTotalSize);
+	}
+}
+
+void mbcExtRAMGBSClear()
+{
+	memset(Ext_Mem,0,0x2000);
 }
 
 void mbcExtRAMLoad(FILE *f)
 {
 	fread(Ext_Mem,1,extTotalSize,f);
+	printf("MBC: Read in saved game\n");
 }
 
 void mbcExtRAMStore(FILE *f)
 {
+	printf("MBC: Saved game\n");
 	fwrite(Ext_Mem,1,extTotalSize,f);
 }
 
@@ -305,14 +338,27 @@ static void mbc2SetExtRAM8(uint16_t addr, uint8_t val)
 }
 
 //No Banks and No RAM IO Regs to be set
-uint8_t mbcGetExtRAMNoBank8(uint16_t addr)
+static uint8_t mbcGetExtRAMNoBank8(uint16_t addr)
 {
 	return Ext_Mem[addr&extAddrMask];
 }
 
-void mbcSetExtRAMNoBank8(uint16_t addr, uint8_t val)
+static void mbcSetExtRAMNoBank8(uint16_t addr, uint8_t val)
 {
 	Ext_Mem[addr&extAddrMask] = val;
+}
+
+//No RAM, just dummy functions
+static uint8_t mbcGetNoExtRAM8(uint16_t addr)
+{
+	(void)addr;
+	return 0xFF;
+}
+
+static void mbcSetNoExtRAM8(uint16_t addr, uint8_t val)
+{
+	(void)addr;
+	(void)val;
 }
 
 size_t mbcRTCSize()
@@ -334,6 +380,7 @@ void mbcRTCInit()
 	RTCSave.days = lt->tm_yday & 255;
 	RTCSave.ctrl = (lt->tm_yday > 255 ? 1: 0);
 	RTCSave.lastTime = curtime;
+	printf("MBC: RTC allowed\n");
 }
 
 static void mbcRTCUpdate()
@@ -385,6 +432,9 @@ static void mbcRTCUpdate()
 void mbcRTCLoad(FILE *f)
 {
 	fread(&RTCSave,1,mbcRTCSize(),f);
+	printf("MBC: Read in RTC Save\n");
+	//refresh timestamps
+	mbcRTCUpdate();
 }
 
 void mbcRTCStore(FILE *f)
@@ -392,6 +442,7 @@ void mbcRTCStore(FILE *f)
 	//update regs one last time before saving
 	mbcRTCUpdate();
 	fwrite(&RTCSave,1,mbcRTCSize(),f);
+	printf("MBC: Saved RTC\n");
 }
 
 uint8_t mbcGetExtRAMRtc8(uint16_t addr)

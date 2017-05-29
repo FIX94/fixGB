@@ -135,7 +135,7 @@ int audioInit()
 
 	player->channels = AL_STEREO_SOFT;
 	player->rate = apuGetFrequency();
-	player->type = AL_FLOAT_SOFT;
+	player->type = AL_SHORT_SOFT;
 
     player->format = GetFormat(player->channels, player->type, alIsBufferFormatSupportedSOFT);
     if(player->format == 0)

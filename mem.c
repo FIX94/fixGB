@@ -97,55 +97,55 @@ static void memSetBankVal()
 	switch(emuGBROM[0x148])
 	{
 		case 0:
-			printf("32KB ROM allowed\n");
+			printf("Mem: 32KB ROM allowed\n");
 			bankMask = 1;
 			break;
 		case 1:
-			printf("64KB ROM allowed\n");
+			printf("Mem: 64KB ROM allowed\n");
 			bankMask = 3;
 			break;
 		case 2:
-			printf("128KB ROM allowed\n");
+			printf("Mem: 128KB ROM allowed\n");
 			bankMask = 7;
 			break;
 		case 3:
-			printf("256KB ROM allowed\n");
+			printf("Mem: 256KB ROM allowed\n");
 			bankMask = 15;
 			break;
 		case 4:
-			printf("512KB ROM allowed\n");
+			printf("Mem: 512KB ROM allowed\n");
 			bankMask = 31;
 			break;
 		case 5:
-			printf("1MB ROM allowed\n");
+			printf("Mem: 1MB ROM allowed\n");
 			bankMask = 63;
 			break;
 		case 6:
-			printf("2MB ROM allowed\n");
+			printf("Mem: 2MB ROM allowed\n");
 			bankMask = 127;
 			break;
 		case 7:
-			printf("4MB ROM allowed\n");
+			printf("Mem: 4MB ROM allowed\n");
 			bankMask = 255;
 			break;
 		case 8:
-			printf("8MB ROM allowed\n");
+			printf("Mem: 8MB ROM allowed\n");
 			bankMask = 511;
 			break;
 		case 0x52:
-			printf("1.1MB ROM allowed\n");
+			printf("Mem: 1.1MB ROM allowed\n");
 			bankMask = 71;
 			break;
 		case 0x53:
-			printf("1.2MB ROM allowed\n");
+			printf("Mem: 1.2MB ROM allowed\n");
 			bankMask = 79;
 			break;
 		case 0x54:
-			printf("1.5MB ROM allowed\n");
+			printf("Mem: 1.5MB ROM allowed\n");
 			bankMask = 95;
 			break;
 		default:
-			printf("Unknown ROM Size, allowing 32KB ROM\n");
+			printf("Mem: Unknown ROM Size, allowing 32KB ROM\n");
 			bankMask = 1;
 			break;
 	}
@@ -160,14 +160,14 @@ static void memSetExtVal()
 		case 0:
 			if(emuGBROM[0x147] == 6)
 			{
-				printf("MBC2 Special RAM\n");
+				printf("Mem: MBC2 Special RAM\n");
 				extAddrMask = 0x1FF; //special case
 				extTotalSize = 0x200;
 				extMask = 1;
 			}
 			else
 			{
-				printf("No RAM allowed\n");
+				printf("Mem: No RAM allowed\n");
 				extMemEnabled = false;
 				extAddrMask = 0; //special case
 				extTotalSize = 0;
@@ -175,33 +175,33 @@ static void memSetExtVal()
 			}
 			break;
 		case 1:
-			printf("2KB RAM allowed\n");
+			printf("Mem: 2KB RAM allowed\n");
 			extAddrMask = 0x7FF; //special case
 			extTotalSize = 0x800;
 			extMask = 1;
 			break;
 		case 2:
-			printf("8KB RAM allowed\n");
+			printf("Mem: 8KB RAM allowed\n");
 			extTotalSize = 0x2000;
 			extMask = 1;
 			break;
 		case 3:
-			printf("32KB RAM allowed\n");
+			printf("Mem: 32KB RAM allowed\n");
 			extTotalSize = 0x8000;
 			extMask = 3;
 			break;
 		case 4:
-			printf("128KB RAM allowed\n");
+			printf("Mem: 128KB RAM allowed\n");
 			extTotalSize = 0x20000;
 			extMask = 15;
 			break;
 		case 5:
-			printf("64KB RAM allowed\n");
+			printf("Mem: 64KB RAM allowed\n");
 			extTotalSize = 0x10000;
 			extMask = 7;
 			break;
 		default:
-			printf("Unknown RAM Size, allowing 8KB RAM\n");
+			printf("Mem: Unknown RAM Size, allowing 8KB RAM\n");
 			extTotalSize = 0x2000;
 			extMask = 1;
 			break;
@@ -210,11 +210,13 @@ static void memSetExtVal()
 
 static uint8_t curGBS = 0;
 extern uint8_t gbsTracksTotal;
+extern uint32_t gbsRomSize;
 bool memInit(bool romcheck, bool gbs)
 {
 	if(romcheck)
 	{
 		cBank = 1;
+		bankMask = 1;
 		extBank = 0;
 		extMask = 0;
 		extAddrMask = 0;
@@ -224,13 +226,60 @@ bool memInit(bool romcheck, bool gbs)
 		rtcUsed = false;
 		if(gbs)
 		{
-			printf("GBS Mode\n");
-			mbcInit(MBC_TYPE_GBS);
 			bankUsed = true;
+			//Get ROM Size multiple
+			if(gbsRomSize <= 0x8000)
+			{
+				printf("Mem: 32KB ROM allowed\n");
+				bankMask = 1;
+			}
+			else if(gbsRomSize <= 0x10000)
+			{
+				printf("Mem: 64KB ROM allowed\n");
+				bankMask = 3;
+			}
+			else if(gbsRomSize <= 0x20000)
+			{
+				printf("Mem: 128KB ROM allowed\n");
+				bankMask = 7;
+			}
+			else if(gbsRomSize <= 0x40000)
+			{
+				printf("Mem: 256KB ROM allowed\n");
+				bankMask = 15;
+			}
+			else if(gbsRomSize <= 0x80000)
+			{
+				printf("Mem: 512KB ROM allowed\n");
+				bankMask = 31;
+			}
+			else if(gbsRomSize <= 0x100000)
+			{
+				printf("Mem: 1MB ROM allowed\n");
+				bankMask = 63;
+			}
+			else if(gbsRomSize <= 0x200000)
+			{
+				printf("Mem: 2MB ROM allowed\n");
+				bankMask = 127;
+			}
+			else if(gbsRomSize <= 0x400000)
+			{
+				printf("Mem: 4MB ROM allowed\n");
+				bankMask = 255;
+			}
+			else
+			{
+				printf("Mem: 8MB ROM allowed\n");
+				bankMask = 511;
+			}
+			//Always have 8KB RAM enabled
 			extMemEnabled = true;
-			printf("8KB RAM allowed\n");
+			printf("Mem: 8KB RAM allowed\n");
 			extTotalSize = 0x2000;
 			extMask = 1;
+			printf("Mem: ROM and RAM (GBS)\n");
+			mbcInit(MBC_TYPE_GBS);
 			memset(gbs_prevValReads,0,8);
 		}
 		else
@@ -238,18 +287,18 @@ bool memInit(bool romcheck, bool gbs)
 			switch(emuGBROM[0x147])
 			{
 				case 0x00:
-					printf("ROM Only\n");
+					printf("Mem: ROM Only\n");
 					mbcInit(MBC_TYPE_NONE);
 					break;
 				case 0x01:
 					memSetBankVal();
-					printf("ROM Only (MBC1)\n");
+					printf("Mem: ROM Only (MBC1)\n");
 					mbcInit(MBC_TYPE_1);
 					break;
 				case 0x02:
 					memSetBankVal();
 					memSetExtVal();
-					printf("ROM and RAM (without save) (MBC1)\n");
+					printf("Mem: ROM and RAM (without save) (MBC1)\n");
 					mbcInit(MBC_TYPE_1);
 					break;
 				case 0xFF:
@@ -257,91 +306,91 @@ bool memInit(bool romcheck, bool gbs)
 				case 0x03:
 					memSetBankVal();
 					memSetExtVal();
-					printf("ROM and RAM (with save) (MBC1)\n");
+					printf("Mem: ROM and RAM (with save) (MBC1)\n");
 					mbcInit(MBC_TYPE_1);
 					memLoadSave();
 					break;
 				case 0x05:
 					memSetBankVal();
-					printf("ROM only (MBC2)\n");
+					printf("Mem: ROM only (MBC2)\n");
 					mbcInit(MBC_TYPE_1);
 					break;
 				case 0x06:
 					memSetBankVal();
 					memSetExtVal();
-					printf("ROM and RAM (with save) (MBC2)\n");
+					printf("Mem: ROM and RAM (with save) (MBC2)\n");
 					mbcInit(MBC_TYPE_2);
 					memLoadSave();
 					break;
 				case 0x08:
 					memSetBankVal();
 					memSetExtVal();
-					printf("ROM and RAM (without save)\n");
+					printf("Mem: ROM and RAM (without save)\n");
 					mbcInit(MBC_TYPE_NONE);
 					break;
 				case 0x09:
 					memSetBankVal();
 					memSetExtVal();
-					printf("ROM and RAM (with save)\n");
+					printf("Mem: ROM and RAM (with save)\n");
 					mbcInit(MBC_TYPE_NONE);
 					memLoadSave();
 					break;
 				case 0x0F:
 					memSetBankVal();
 					mbcRTCInit();
-					printf("ROM and RTC (MBC3)\n");
+					printf("Mem: ROM and RTC (MBC3)\n");
 					mbcInit(MBC_TYPE_3);
 					memLoadSave();
 					break;
 				case 0x11:
 					memSetBankVal();
-					printf("ROM Only (MBC3)\n");
+					printf("Mem: ROM Only (MBC3)\n");
 					mbcInit(MBC_TYPE_3);
 					break;
 				case 0x12:
 					memSetBankVal();
 					memSetExtVal();
-					printf("ROM and RAM (without save) (MBC3)\n");
+					printf("Mem: ROM and RAM (without save) (MBC3)\n");
 					mbcInit(MBC_TYPE_3);
 					break;
 				case 0x10:
 					memSetBankVal();
 					memSetExtVal();
 					mbcRTCInit();
-					printf("ROM and RAM (with save) and RTC (MBC3)\n");
+					printf("Mem: ROM and RAM (with save) and RTC (MBC3)\n");
 					mbcInit(MBC_TYPE_3);
 					memLoadSave();
 					break;
 				case 0x13:
 					memSetBankVal();
 					memSetExtVal();
-					printf("ROM and RAM (with save) (MBC3)\n");
+					printf("Mem: ROM and RAM (with save) (MBC3)\n");
 					mbcInit(MBC_TYPE_3);
 					memLoadSave();
 					break;
 				case 0x19:
 				case 0x1C:
 					memSetBankVal();
-					printf("ROM Only (MBC5)\n");
+					printf("Mem: ROM Only (MBC5)\n");
 					mbcInit(MBC_TYPE_5);
 					break;
 				case 0x1A:
 				case 0x1D:
-					printf("ROM and RAM (without save) (MBC5)\n");
-					mbcInit(MBC_TYPE_5);
 					memSetBankVal();
 					memSetExtVal();
+					printf("Mem: ROM and RAM (without save) (MBC5)\n");
+					mbcInit(MBC_TYPE_5);
 					break;
 				case 0x1B:
 				case 0x1E:
-					printf("ROM and RAM (with save) (MBC5)\n");
-					mbcInit(MBC_TYPE_5);
 					memSetBankVal();
 					memSetExtVal();
+					printf("Mem: ROM and RAM (with save) (MBC5)\n");
+					mbcInit(MBC_TYPE_5);
 					memLoadSave();
 					break;
 				default:
-					printf("Unsupported Type %02x!\n", emuGBROM[0x147]);
+					printf("Mem: Unsupported Type %02x!\n", emuGBROM[0x147]);
 					return false;
 			}
 		}
@@ -349,6 +398,13 @@ bool memInit(bool romcheck, bool gbs)
 	memset(Main_Mem,0,0x8000);
 	memset(High_Mem,0,0x80);
 	memset(genericReg,0,4);
+	//IMPORTANT: Clear Ext RAM
+	if(gbs) //On song switches
+	{
+		mbcExtRAMGBSClear();
+		//and reset ROM Bank as well
+		cBank = 1;
+	}
 	memLastVal = 0;
 	irReq = 0;
 	serialReg = 0;
@@ -472,7 +528,7 @@ bool memInit(bool romcheck, bool gbs)
 			memSet8ptr[addr] = memSetGeneralReg8;
 		}
 		else //Should never happen
-			printf("WARNING: Address %04x uninitialized!\n", addr);
+			printf("MEM WARNING: Address %04x uninitialized!\n", addr);
 	}
 	return true;
 }
@@ -511,7 +567,7 @@ uint8_t memGet8(uint16_t addr)
 
 static uint8_t memGetROMBank8(uint16_t addr)
 {
-	return emuGBROM[(cBank<<14)+(addr&0x3FFF)];
+	return emuGBROM[(cBank<<14)|(addr&0x3FFF)];
 }
 
 static uint8_t memGetROMNoBank8(uint16_t addr)
@@ -766,7 +822,7 @@ void memLoadSave()
 			}
 			if(rtcUsed && (saveSize >= mbcRTCSize()))
 				mbcRTCLoad(save);
-			printf("Done reading %s\n", emuSaveName);
+			printf("Mem: Done reading %s\n", emuSaveName);
 			fclose(save);
 		}
 	}
@@ -783,6 +839,7 @@ void memSaveGame()
 				mbcExtRAMStore(save);
 			if(rtcUsed)
 				mbcRTCStore(save);
+			printf("Mem: Done writing %s\n", emuSaveName);
 			fclose(save);
 		}
 	}
