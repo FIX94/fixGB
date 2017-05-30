@@ -27,4 +27,6 @@ void memClearCurIrqList(uint8_t num);
 void memEnableVBlankIrq();
 void memEnableStatIrq();
 
+extern uint8_t Ext_Mem[0x20000];
+
 #endif

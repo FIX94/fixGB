@@ -9,6 +9,7 @@
 #include <stdbool.h>
 #include <string.h>
 #include <inttypes.h>
+#include <string.h>
 #include "cpu.h"
 #include "ppu.h"
 #include "mem.h"

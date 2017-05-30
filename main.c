@@ -11,8 +11,11 @@
 #include <malloc.h>
 #include <inttypes.h>
 #include <ctype.h>
+#include <string.h>
+#ifndef __LIBRETRO__
 #include <GL/glut.h>
 #include <GL/glext.h>
+#endif
 #include <time.h>
 #include <math.h>
 #include "cpu.h"
@@ -29,7 +32,7 @@
 #define DEBUG_KEY 0
 #define DEBUG_LOAD_INFO 1
 
-static const char *VERSION_STRING = "fixGB Alpha v0.8";
+const char *VERSION_STRING = "fixGB Alpha v0.8";
 static char window_title[256];
 static char window_title_pause[256];
 
@@ -43,13 +46,13 @@ enum {
 #endif
 };
 
-static void gbEmuFileOpen(char *name);
+static void gbEmuFileOpen(const char *name);
 static bool gbEmuFileRead();
 static void gbEmuFileClose();
 
 static void gbEmuDisplayFrame(void);
-static void gbEmuMainLoop(void);
-static void gbEmuDeinit(void);
+void gbEmuMainLoop(void);
+void gbEmuDeinit(void);
 
 static void gbEmuHandleKeyDown(unsigned char key, int x, int y);
 static void gbEmuHandleKeyUp(unsigned char key, int x, int y);
@@ -109,8 +112,15 @@ static uint16_t mainLoopPos;
 //from input.c
 extern uint8_t inValReads[8];
 
+#ifdef __LIBRETRO__
+int gbEmuLoadGame(const char* filename)
+{
+	int argc = 2;
+	const char* argv[] = {"fixGB", filename};
+#else
 int main(int argc, char** argv)
 {
+#endif
 	puts(VERSION_STRING);
 	strcpy(window_title, VERSION_STRING);
 	memset(textureImage,0,visibleImg);
@@ -271,6 +281,7 @@ int main(int argc, char** argv)
 	//do one scanline per idle loop
 	mainLoopRuns = 70224;
 	mainLoopPos = mainLoopRuns;
+	#ifndef __LIBRETRO__
 	glutInit(&argc, argv);
 	glutInitWindowSize(VISIBLE_DOTS*scaleFactor, linesToDraw*scaleFactor);
 	glutInitDisplayMode(GLUT_DOUBLE | GLUT_RGBA);
@@ -298,7 +309,7 @@ int main(int argc, char** argv)
 	glShadeModel(GL_FLAT);
 
 	glutMainLoop();
-
+	#endif // __LIBRETRO__
 	return EXIT_SUCCESS;
 }
 
@@ -310,7 +321,7 @@ static uint32_t gbEmuZipLen = 0;
 static unzFile gbEmuZipObj;
 static unz_file_info gbEmuZipObjInfo;
 #endif
-static int gbEmuGetFileType(char *name)
+static int gbEmuGetFileType(const char *name)
 {
 	int nLen = strlen(name);
 	if(nLen > 4 && name[nLen-4] == '.')
@@ -332,7 +343,7 @@ static int gbEmuGetFileType(char *name)
 	return FTYPE_UNK;
 }
 
-static void gbEmuFileOpen(char *name)
+static void gbEmuFileOpen(const char *name)
 {
 	emuFileType = FTYPE_UNK;
 	memset(emuFileName,0,1024);
@@ -472,9 +483,9 @@ static void gbEmuFileClose()
 	gbEmuFilePointer = NULL;
 }
 
-static volatile bool emuRenderFrame = false;
+volatile bool emuRenderFrame = false;
 
-static void gbEmuDeinit(void)
+void gbEmuDeinit(void)
 {
 	//printf("\n");
 	emuRenderFrame = false;
@@ -494,7 +505,7 @@ bool emuSkipFrame = false;
 static uint8_t mainClock = 0;
 static uint8_t memClock = 0;
 
-static void gbEmuMainLoop(void)
+void gbEmuMainLoop(void)
 {
 	//do one scanline loop
 	do
@@ -549,7 +560,9 @@ static void gbEmuMainLoop(void)
 			}
 			emuFrameStart = end;
 			#endif
+			#ifndef __LIBRETRO__
 			glutPostRedisplay();
+			#endif
 			//send VSync to GBS Player if required
 			if(gbEmuGBSPlayback && !gbsTimerMode)
 				cpuPlayGBS();
@@ -573,7 +586,7 @@ static void gbEmuMainLoop(void)
 	emuMainFrameStart = end;
 	#endif
 }
-
+#ifndef __LIBRETRO__
 static void gbEmuHandleKeyDown(unsigned char key, int x, int y)
 {
 	(void)x;
@@ -860,3 +873,4 @@ static void gbEmuDisplayFrame()
 
 	glutSwapBuffers();
 }
+#endif
