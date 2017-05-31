@@ -343,24 +343,27 @@ bool apuCycle()
 	lastLPOutRight = curLPOutRight;
 	lastHPOutRight = curHPOutRight;
 #else
+	int32_t curIn, curOut;
 	//gen output Left
-	int32_t curInLeft = ((p1OutLeft + p2OutLeft + wavOutLeft + noiseOutLeft))*(apuMasterVolLeft+1)<<7;
-	int32_t curLPOutLeft = lastLPOutLeft+((lpVal*(curInLeft-lastLPOutLeft))>>15);
-	int32_t curHPOutLeft = (hpVal*(lastHPOutLeft+lastLPOutLeft-curLPOutLeft))>>15;
+	curIn = ((p1OutLeft + p2OutLeft + wavOutLeft + noiseOutLeft))*(apuMasterVolLeft+1)<<7;
+	curOut = lastLPOutLeft+((lpVal*(curIn-lastLPOutLeft))>>15); //Set Left Lowpass Output
+	curIn = (lastHPOutLeft+lastLPOutLeft-curOut); //Set Left Highpass Input
+	curIn += (curIn>>31)&1; //Add Sign Bit for proper Downshift later
+	lastLPOutLeft = curOut; //Save Left Lowpass Output
+	curOut = (hpVal*curIn)>>15; //Set Left Highpass Output
+	lastHPOutLeft = curOut; //Save Left Highpass Output
+	//Save Clipped Left Highpass Output
+	apuOutBuf[curBufPos++] = ((soundEnabled)?((curOut > 32767)?(32767):((curOut < -32768)?(-32768):curOut)):0);
 	//gen output Right
-	int32_t curInRight = ((p1OutRight + p2OutRight + wavOutRight + noiseOutRight))*(apuMasterVolRight+1)<<7;
-	int32_t curLPOutRight = lastLPOutRight+((lpVal*(curInRight-lastLPOutRight))>>15);
-	int32_t curHPOutRight = (hpVal*(lastHPOutRight+lastLPOutRight-curLPOutRight))>>15;
-	//set output Left
-	apuOutBuf[curBufPos++] = ((soundEnabled)?((curHPOutLeft > 32767)?(32767):((curHPOutLeft < -32768)?(-32768):curHPOutLeft)):0);
-	//set output Right
-	apuOutBuf[curBufPos++] = ((soundEnabled)?((curHPOutRight > 32767)?(32767):((curHPOutRight < -32768)?(-32768):curHPOutRight)):0);
-	//save HP and LP Left
-	lastLPOutLeft = curLPOutLeft;
-	lastHPOutLeft = curHPOutLeft;
-	//save HP and LP Right
-	lastLPOutRight = curLPOutRight;
-	lastHPOutRight = curHPOutRight;
+	curIn = ((p1OutRight + p2OutRight + wavOutRight + noiseOutRight))*(apuMasterVolRight+1)<<7;
+	curOut = lastLPOutRight+((lpVal*(curIn-lastLPOutRight))>>15); //Set Right Lowpass Output
+	curIn = (lastHPOutRight+lastLPOutRight-curOut); //Set Right Highpass Input
+	curIn += (curIn>>31)&1; //Add Sign Bit for proper Downshift later
+	lastLPOutRight = curOut; //Save Right Lowpass Output
+	curOut = (hpVal*curIn)>>15; //Set Right Highpass Output
+	lastHPOutRight = curOut; //Save Right Highpass Output
+	//Save Clipped Right Highpass Output
+	apuOutBuf[curBufPos++] = ((soundEnabled)?((curOut > 32767)?(32767):((curOut < -32768)?(-32768):curOut)):0);
 #endif
 	return true;
 }
