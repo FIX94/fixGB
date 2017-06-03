@@ -26,7 +26,7 @@
 #define DEBUG_KEY 0
 #define DEBUG_LOAD_INFO 1
 
-static const char *VERSION_STRING = "fixGB Alpha v0.5.3";
+static const char *VERSION_STRING = "fixGB Alpha v0.5.4";
 
 static void gbEmuDisplayFrame(void);
 static void gbEmuMainLoop(void);
@@ -606,8 +606,7 @@ static void gbEmuDisplayFrame()
 			emuRenderFrame = false;
 			return;
 		}
-		if(textureImage != NULL)
-			glTexImage2D(GL_TEXTURE_2D, 0, 4, VISIBLE_DOTS, VISIBLE_LINES, 0, GL_BGRA, GL_UNSIGNED_INT_8_8_8_8_REV, textureImage);
+		glTexImage2D(GL_TEXTURE_2D, 0, 4, VISIBLE_DOTS, VISIBLE_LINES, 0, GL_BGRA, GL_UNSIGNED_INT_8_8_8_8_REV, textureImage);
 		emuRenderFrame = false;
 	}
 
