@@ -48,7 +48,7 @@ static bool timerRegEnable = false;
 static bool emuSaveEnabled = false;
 
 //from main.c
-extern bool allowCgbRegs;
+extern bool gbCgbMode;
 extern uint8_t *emuGBROM;
 
 //from mbc.c
@@ -390,7 +390,7 @@ bool memInit(bool romcheck, bool gbs)
 					memLoadSave();
 					break;
 				default:
-					printf("Mem: Unsupported Type %02x!\n", emuGBROM[0x147]);
+					printf("Mem Error: Unsupported MBC Type %02x!\n", emuGBROM[0x147]);
 					return false;
 			}
 		}
@@ -444,8 +444,8 @@ bool memInit(bool romcheck, bool gbs)
 		}
 		else if(addr < 0xA000) //PPU VRAM
 		{
-			memGet8ptr[addr] = allowCgbRegs?ppuGetVRAMBank8:ppuGetVRAMNoBank8;
-			memSet8ptr[addr] = allowCgbRegs?ppuSetVRAMBank8:ppuSetVRAMNoBank8;
+			memGet8ptr[addr] = gbCgbMode?ppuGetVRAMBank8:ppuGetVRAMNoBank8;
+			memSet8ptr[addr] = gbCgbMode?ppuSetVRAMBank8:ppuSetVRAMNoBank8;
 		}
 		else if(addr < 0xC000) //Cardridge RAM
 		{
@@ -459,8 +459,8 @@ bool memInit(bool romcheck, bool gbs)
 		}
 		else if(addr < 0xE000) //Main RAM (possibly banked)
 		{
-			memGet8ptr[addr] = allowCgbRegs?memGetRAMBank8:memGetRAMNoBank8;
-			memSet8ptr[addr] = allowCgbRegs?memSetRAMBank8:memSetRAMNoBank8;
+			memGet8ptr[addr] = gbCgbMode?memGetRAMBank8:memGetRAMNoBank8;
+			memSet8ptr[addr] = gbCgbMode?memSetRAMBank8:memSetRAMNoBank8;
 		}
 		else if(addr < 0xF000) //Echo Main RAM
 		{
@@ -469,8 +469,8 @@ bool memInit(bool romcheck, bool gbs)
 		}
 		else if(addr < 0xFE00) //Echo Main RAM (possibly banked)
 		{
-			memGet8ptr[addr] = allowCgbRegs?memGetRAMBank8:memGetRAMNoBank8;
-			memSet8ptr[addr] = allowCgbRegs?memSetRAMBank8:memSetRAMNoBank8;
+			memGet8ptr[addr] = gbCgbMode?memGetRAMBank8:memGetRAMNoBank8;
+			memSet8ptr[addr] = gbCgbMode?memSetRAMBank8:memSetRAMNoBank8;
 		}
 		else if(addr < 0xFEA0) //PPU OAM
 		{
@@ -504,13 +504,13 @@ bool memInit(bool romcheck, bool gbs)
 		}
 		else if(addr < 0xFF68) //General CGB Features
 		{
-			memGet8ptr[addr] = allowCgbRegs?memGetGeneralReg8:memGetInvalid8;
-			memSet8ptr[addr] = allowCgbRegs?memSetGeneralReg8:memSetInvalid8;
+			memGet8ptr[addr] = gbCgbMode?memGetGeneralReg8:memGetInvalid8;
+			memSet8ptr[addr] = gbCgbMode?memSetGeneralReg8:memSetInvalid8;
 		}
 		else if(addr < 0xFF6C) //PPU CGB Regs
 		{
-			memGet8ptr[addr] = allowCgbRegs?ppuGetReg8:memGetInvalid8;
-			memSet8ptr[addr] = allowCgbRegs?ppuSetReg8:memSetInvalid8;
+			memGet8ptr[addr] = gbCgbMode?ppuGetReg8:memGetInvalid8;
+			memSet8ptr[addr] = gbCgbMode?ppuSetReg8:memSetInvalid8;
 		}
 		else if(addr < 0xFF80) //General CGB Features
 		{
@@ -528,7 +528,7 @@ bool memInit(bool romcheck, bool gbs)
 			memSet8ptr[addr] = memSetGeneralReg8;
 		}
 		else //Should never happen
-			printf("MEM WARNING: Address %04x uninitialized!\n", addr);
+			printf("Mem Warning: Address %04x uninitialized!\n", addr);
 	}
 	return true;
 }
@@ -536,7 +536,8 @@ bool memInit(bool romcheck, bool gbs)
 void memStartGBS()
 {
 	curGBS = 1;
-	printf("Track %i/%i         ", curGBS, gbsTracksTotal);
+	//printf("Track %i/%i         ", curGBS, gbsTracksTotal);
+	ppuDrawGBSTrackNum(curGBS, gbsTracksTotal);
 	cpuLoadGBS(curGBS-1);
 }
 
@@ -630,15 +631,15 @@ static uint8_t memGetGeneralReg8(uint16_t addr)
 		case 0x56:
 			return irReq|0x3C;
 		case 0x6C:
-			return (!(allowCgbRegs))|0xFE;
+			return (!(gbCgbMode))|0xFE;
 		case 0x70:
-			return (allowCgbRegs)?(cgbMainBank|0xF8):0xFF;
+			return (gbCgbMode)?(cgbMainBank|0xF8):0xFF;
 		case 0x72:
 			return genericReg[0];
 		case 0x73:
 			return genericReg[1];
 		case 0x74:
-			return (allowCgbRegs)?genericReg[2]:0xFF;
+			return (gbCgbMode)?genericReg[2]:0xFF;
 		case 0x75:
 			return genericReg[3]|0x8F;
 		case 0x76:
@@ -748,7 +749,7 @@ static void memSetGeneralReg8(uint16_t addr, uint8_t val)
 		case 0x56:
 			irReq = val;
 		case 0x70:
-			if(allowCgbRegs)
+			if(gbCgbMode)
 			{
 				cgbMainBank = (val&7);
 				if(cgbMainBank == 0)
@@ -762,7 +763,7 @@ static void memSetGeneralReg8(uint16_t addr, uint8_t val)
 			genericReg[1] = val;
 			break;
 		case 0x74:
-			if(allowCgbRegs)
+			if(gbCgbMode)
 				genericReg[2] = val;
 			break;
 		case 0x75:
@@ -790,7 +791,7 @@ void memDumpMainMem()
 	FILE *f = fopen("MainMem.bin","wb");
 	if(f)
 	{
-		fwrite(Main_Mem,1,allowCgbRegs?0x8000:0x2000,f);
+		fwrite(Main_Mem,1,gbCgbMode?0x8000:0x2000,f);
 		fclose(f);
 	}
 	f = fopen("HighMem.bin","wb");
@@ -860,7 +861,8 @@ void memClockTimers()
 			curGBS++;
 			if(curGBS > gbsTracksTotal)
 				curGBS = 1;
-			printf("\rTrack %i/%i         ", curGBS, gbsTracksTotal);
+			//printf("\rTrack %i/%i         ", curGBS, gbsTracksTotal);
+			ppuDrawGBSTrackNum(curGBS, gbsTracksTotal);
 			cpuLoadGBS(curGBS-1);
 		}
 		else if(!inValReads[BUTTON_RIGHT])
@@ -872,7 +874,8 @@ void memClockTimers()
 			curGBS--;
 			if(curGBS < 1)
 				curGBS = gbsTracksTotal;
-			printf("\rTrack %i/%i         ", curGBS, gbsTracksTotal);
+			//printf("\rTrack %i/%i         ", curGBS, gbsTracksTotal);
+			ppuDrawGBSTrackNum(curGBS, gbsTracksTotal);
 			cpuLoadGBS(curGBS-1);
 		}
 		else if(!inValReads[BUTTON_LEFT])

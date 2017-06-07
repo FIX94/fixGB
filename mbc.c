@@ -96,7 +96,7 @@ void mbcInit(uint8_t type)
 		{
 			mbcGetRAM8 = mbc2GetExtRAM8;
 			mbcSetRAM8 = mbc2SetExtRAM8;
-			printf("MBC Set Special MBC2 RAM Functions\n");
+			printf("MBC: Set Special MBC2 RAM Functions\n");
 		}
 		else if(extTotalSize < 0x2000)
 		{

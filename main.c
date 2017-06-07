@@ -26,7 +26,10 @@
 #define DEBUG_KEY 0
 #define DEBUG_LOAD_INFO 1
 
-static const char *VERSION_STRING = "fixGB Alpha v0.5.4";
+static const char *VERSION_STRING = "fixGB Alpha v0.5.5";
+static char window_title[256];
+static char window_title_pause[256];
+static int window_handle = -1;
 
 static void gbEmuDisplayFrame(void);
 static void gbEmuMainLoop(void);
@@ -40,9 +43,8 @@ static void gbEmuHandleSpecialUp(int key, int x, int y);
 uint8_t *emuGBROM = NULL;
 char *emuSaveName = NULL;
 //used externally
-uint32_t textureImage[0x9A00];
-bool nesPause = false;
-bool ppuDebugPauseFrame = false;
+uint32_t textureImage[0x5A00];
+bool gbPause = false;
 bool gbEmuGBSPlayback = false;
 bool gbsTimerMode = false;
 uint16_t gbsLoadAddr = 0;
@@ -52,7 +54,7 @@ uint32_t gbsRomSize = 0;
 uint16_t gbsSP = 0;
 uint8_t gbsTracksTotal = 0, gbsTMA = 0, gbsTAC = 0;
 uint8_t cpuTimer = 3;
-bool allowCgbRegs = false;
+bool gbCgbMode = false;
 
 static bool inPause = false;
 static bool inResize = false;
@@ -77,6 +79,7 @@ static DWORD emuMainTotalElapsed = 0;
 #define VISIBLE_DOTS 160
 #define VISIBLE_LINES 144
 
+static uint32_t linesToDraw = VISIBLE_LINES;
 static const uint32_t visibleImg = VISIBLE_DOTS*VISIBLE_LINES*4;
 static uint8_t scaleFactor = 3;
 static uint32_t mainLoopRuns;
@@ -87,10 +90,18 @@ extern uint8_t inValReads[8];
 int main(int argc, char** argv)
 {
 	puts(VERSION_STRING);
+	strcpy(window_title, VERSION_STRING);
+	memset(textureImage,0,visibleImg);
 	if(argc >= 2 && (strstr(argv[1],".gbs") != NULL || strstr(argv[1],".GBS") != NULL))
 	{
 		FILE *gbF = fopen(argv[1],"rb");
-		if(!gbF) return EXIT_SUCCESS;
+		if(!gbF)
+		{
+			printf("Main: Could not open %s!\n", argv[1]);
+			puts("Press enter to exit");
+			getc(stdin);
+			return EXIT_SUCCESS;
+		}
 		fseek(gbF,0,SEEK_END);
 		size_t fsize = ftell(gbF);
 		rewind(gbF);
@@ -112,14 +123,14 @@ int main(int argc, char** argv)
 		if(gbsTAC&0x80)
 		{
 			cpuSetSpeed(true);
-			allowCgbRegs = true;
+			gbCgbMode = true;
 		}
 		else
 		{
 			cpuSetSpeed(false);
-			allowCgbRegs = false;
+			gbCgbMode = false;
 		}
-		printf("Main: CGB Regs are %sallowed\n", allowCgbRegs?"":"dis");
+		printf("Main: CGB Regs are %sallowed\n", gbCgbMode?"":"dis");
 		if(gbsTAC&4)
 		{
 			printf("Main: GBS Play Timing: Timer\n");
@@ -132,19 +143,30 @@ int main(int argc, char** argv)
 		}
 		memInit(true,true);
 		if(tmpROM[0x10] != 0)
+		{
 			printf("Game: %.32s\n",(char*)(tmpROM+0x10));
+			sprintf(window_title, "%.32s (GBS) - %s\n", (char*)(tmpROM+0x10), VERSION_STRING);
+		}
 		free(tmpROM);
 		printf("Read in %s\n", argv[1]);
 		apuInitBufs();
 		//does all inits for us
 		memStartGBS();
 		gbEmuGBSPlayback = true;
+		linesToDraw = 20;
+		scaleFactor = 4;
 	}
 	else if(argc >= 2 && (strstr(argv[1],".gbc") != NULL || strstr(argv[1],".GBC") != NULL
 						|| strstr(argv[1],".gb") != NULL || strstr(argv[1],".GB") != NULL))
 	{
 		FILE *gbF = fopen(argv[1],"rb");
-		if(!gbF) return EXIT_SUCCESS;
+		if(!gbF)
+		{
+			printf("Main: Could not open %s!\n", argv[1]);
+			puts("Press enter to exit");
+			getc(stdin);
+			return EXIT_SUCCESS;
+		}
 		fseek(gbF,0,SEEK_END);
 		size_t fsize = ftell(gbF);
 		rewind(gbF);
@@ -152,7 +174,9 @@ int main(int argc, char** argv)
 		if(emuGBROM == NULL)
 		{
 			printf("Main: Unable to allocate ROM space...\n");
-			exit(EXIT_SUCCESS);
+			puts("Press enter to exit");
+			getc(stdin);
+			return EXIT_SUCCESS;
 		}
 		fread(emuGBROM,1,fsize,gbF);
 		fclose(gbF);
@@ -169,13 +193,14 @@ int main(int argc, char** argv)
 			memcpy(emuSaveName+strlen(argv[1])-2,"sav",4);
 		}
 		//Set CGB Regs allowed
-		allowCgbRegs = (emuGBROM[0x143] == 0x80 || emuGBROM[0x143] == 0xC0);
-		printf("Main: CGB Regs are %sallowed\n", allowCgbRegs?"":"dis");
+		gbCgbMode = (emuGBROM[0x143] == 0x80 || emuGBROM[0x143] == 0xC0);
+		printf("Main: CGB Regs are %sallowed\n", gbCgbMode?"":"dis");
 		if(!memInit(true,false))
 		{
 			free(emuGBROM);
-			printf("Exit...\n");
-			exit(EXIT_SUCCESS);
+			puts("Press enter to exit");
+			getc(stdin);
+			return EXIT_SUCCESS;
 		}
 		//CPU DMG Mode
 		cpuSetSpeed(false);
@@ -185,11 +210,28 @@ int main(int argc, char** argv)
 		apuInit();
 		inputInit();
 		if(emuGBROM[0x134] != 0)
-			printf("Game: %.11s\n", (char*)(emuGBROM+0x134));
+		{
+			if(gbCgbMode)
+			{
+				printf("Game: %.11s\n", (char*)(emuGBROM+0x134));
+				sprintf(window_title, "%.11s (CGB) - %s\n", (char*)(emuGBROM+0x134), VERSION_STRING);
+			}
+			else
+			{
+				printf("Game: %.16s\n", (char*)(emuGBROM+0x134));
+				sprintf(window_title, "%.16s (DMG) - %s\n", (char*)(emuGBROM+0x134), VERSION_STRING);
+			}
+		}
 		printf("Read in %s\n", argv[1]);
 	}
 	if(emuGBROM == NULL)
+	{
+		printf("Main: No File to Open! Make sure to call fixGB with a .gb/.gbc/.gbs File as Argument.\n");
+		puts("Press enter to exit");
+		getc(stdin);
 		return EXIT_SUCCESS;
+	}
+	sprintf(window_title_pause, "%s (Pause)", window_title);
 	#if WINDOWS_BUILD
 	#if DEBUG_HZ
 	emuFrameStart = GetTickCount();
@@ -198,14 +240,13 @@ int main(int argc, char** argv)
 	emuMainFrameStart = GetTickCount();
 	#endif
 	#endif
-	memset(textureImage,0,visibleImg);
 	//do one scanline per idle loop
 	mainLoopRuns = 70224;
 	mainLoopPos = mainLoopRuns;
 	glutInit(&argc, argv);
-	glutInitWindowSize(VISIBLE_DOTS*scaleFactor, VISIBLE_LINES*scaleFactor);
+	glutInitWindowSize(VISIBLE_DOTS*scaleFactor, linesToDraw*scaleFactor);
 	glutInitDisplayMode(GLUT_DOUBLE | GLUT_RGBA);
-	glutCreateWindow(VERSION_STRING);
+	window_handle = glutCreateWindow(gbPause ? window_title_pause : window_title);
 	audioInit();
 	atexit(&gbEmuDeinit);
 	glutKeyboardFunc(&gbEmuHandleKeyDown);
@@ -220,7 +261,7 @@ int main(int argc, char** argv)
 	wglSwapIntervalEXT(1);
 	#endif
 	glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-	glTexImage2D(GL_TEXTURE_2D, 0, 4, VISIBLE_DOTS, VISIBLE_LINES, 0, GL_BGRA, GL_UNSIGNED_INT_8_8_8_8_REV, textureImage);
+	glTexImage2D(GL_TEXTURE_2D, 0, 4, VISIBLE_DOTS, linesToDraw, 0, GL_BGRA, GL_UNSIGNED_INT_8_8_8_8_REV, textureImage);
 	glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP);
 	glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP);
 	glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
@@ -248,6 +289,9 @@ static void gbEmuDeinit(void)
 	if(emuSaveName != NULL)
 		free(emuSaveName);
 	emuSaveName = NULL;
+	if(window_handle >= 0)
+		glutDestroyWindow(window_handle);
+	window_handle = -1;
 	//printf("Bye!\n");
 }
 
@@ -263,7 +307,7 @@ static void gbEmuMainLoop(void)
 	//do one scanline loop
 	do
 	{
-		if((!emuSkipVsync && emuRenderFrame) || nesPause)
+		if((!emuSkipVsync && emuRenderFrame) || gbPause)
 		{
 			#if (WINDOWS_BUILD && DEBUG_MAIN_CALLS)
 			emuMainTimesSkipped++;
@@ -288,11 +332,7 @@ static void gbEmuMainLoop(void)
 		if(!(mainClock&cpuTimer))
 		{
 			//main CPU clock
-			if(!cpuCycle())
-			{
-				//memDumpMainMem();
-				exit(EXIT_SUCCESS);
-			}
+			cpuCycle();
 			//mem clock tied to CPU clock, so
 			//double speed in CGB mode!
 			if(!(memClock&3))
@@ -300,31 +340,26 @@ static void gbEmuMainLoop(void)
 			memClock++;
 		}
 		//run PPU last
-		if(!ppuCycle())
-			exit(EXIT_SUCCESS);
+		ppuCycle();
 		if(ppuDrawDone())
 		{
-			if(!gbEmuGBSPlayback)
+			emuRenderFrame = true;
+			//update console stats if requested
+			#if (WINDOWS_BUILD && DEBUG_HZ)
+			emuTimesCalled++;
+			DWORD end = GetTickCount();
+			emuTotalElapsed += end - emuFrameStart;
+			if(emuTotalElapsed >= 1000)
 			{
-				emuRenderFrame = true;
-				//update console stats if requested
-				#if (WINDOWS_BUILD && DEBUG_HZ)
-				emuTimesCalled++;
-				DWORD end = GetTickCount();
-				emuTotalElapsed += end - emuFrameStart;
-				if(emuTotalElapsed >= 1000)
-				{
-					printf("\r%iHz   ", emuTimesCalled);
-					emuTimesCalled = 0;
-					emuTotalElapsed = 0;
-				}
-				emuFrameStart = end;
-				#endif
-				glutPostRedisplay();
-				if(ppuDebugPauseFrame)
-					nesPause = true;
+				printf("\r%iHz   ", emuTimesCalled);
+				emuTimesCalled = 0;
+				emuTotalElapsed = 0;
 			}
-			else if(!gbsTimerMode)
+			emuFrameStart = end;
+			#endif
+			glutPostRedisplay();
+			//send VSync to GBS Player if required
+			if(gbEmuGBSPlayback && !gbsTimerMode)
 				cpuPlayGBS();
 		}
 		mainClock++;
@@ -399,70 +434,71 @@ static void gbEmuHandleKeyDown(unsigned char key, int x, int y)
 				printf("pause\n");
 				#endif
 				inPause = true;
-				nesPause ^= true;
+				gbPause ^= true;
+				glutSetWindowTitle(gbPause ? window_title_pause : window_title);
 			}
 			break;
 		case '1':
 			if(!inResize)
 			{
 				inResize = true;
-				glutReshapeWindow(VISIBLE_DOTS*1, VISIBLE_LINES*1);
+				glutReshapeWindow(VISIBLE_DOTS*1, linesToDraw*1);
 			}
 			break;
 		case '2':
 			if(!inResize)
 			{
 				inResize = true;
-				glutReshapeWindow(VISIBLE_DOTS*2, VISIBLE_LINES*2);
+				glutReshapeWindow(VISIBLE_DOTS*2, linesToDraw*2);
 			}
 			break;
 		case '3':
 			if(!inResize)
 			{
 				inResize = true;
-				glutReshapeWindow(VISIBLE_DOTS*3, VISIBLE_LINES*3);
+				glutReshapeWindow(VISIBLE_DOTS*3, linesToDraw*3);
 			}
 			break;
 		case '4':
 			if(!inResize)
 			{
 				inResize = true;
-				glutReshapeWindow(VISIBLE_DOTS*4, VISIBLE_LINES*4);
+				glutReshapeWindow(VISIBLE_DOTS*4, linesToDraw*4);
 			}
 			break;
 		case '5':
 			if(!inResize)
 			{
 				inResize = true;
-				glutReshapeWindow(VISIBLE_DOTS*5, VISIBLE_LINES*5);
+				glutReshapeWindow(VISIBLE_DOTS*5, linesToDraw*5);
 			}
 			break;
 		case '6':
 			if(!inResize)
 			{
 				inResize = true;
-				glutReshapeWindow(VISIBLE_DOTS*6, VISIBLE_LINES*6);
+				glutReshapeWindow(VISIBLE_DOTS*6, linesToDraw*6);
 			}
 			break;
 		case '7':
 			if(!inResize)
 			{
 				inResize = true;
-				glutReshapeWindow(VISIBLE_DOTS*7, VISIBLE_LINES*7);
+				glutReshapeWindow(VISIBLE_DOTS*7, linesToDraw*7);
 			}
 			break;
 		case '8':
 			if(!inResize)
 			{
 				inResize = true;
-				glutReshapeWindow(VISIBLE_DOTS*8, VISIBLE_LINES*8);
+				glutReshapeWindow(VISIBLE_DOTS*8, linesToDraw*8);
 			}
 			break;
 		case '9':
 			if(!inResize)
 			{
 				inResize = true;
-				glutReshapeWindow(VISIBLE_DOTS*9, VISIBLE_LINES*9);
+				glutReshapeWindow(VISIBLE_DOTS*9, linesToDraw*9);
 			}
 			break;
 		default:
@@ -606,7 +642,7 @@ static void gbEmuDisplayFrame()
 			emuRenderFrame = false;
 			return;
 		}
-		glTexImage2D(GL_TEXTURE_2D, 0, 4, VISIBLE_DOTS, VISIBLE_LINES, 0, GL_BGRA, GL_UNSIGNED_INT_8_8_8_8_REV, textureImage);
+		glTexImage2D(GL_TEXTURE_2D, 0, 4, VISIBLE_DOTS, linesToDraw, 0, GL_BGRA, GL_UNSIGNED_INT_8_8_8_8_REV, textureImage);
 		emuRenderFrame = false;
 	}
 
@@ -618,10 +654,10 @@ static void gbEmuDisplayFrame()
 	glMatrixMode(GL_MODELVIEW);
 	glLoadIdentity();
 
-	double upscaleVal = round((((double)glutGet(GLUT_WINDOW_HEIGHT))/((double)VISIBLE_LINES))*20.0)/20.0;
+	double upscaleVal = round((((double)glutGet(GLUT_WINDOW_HEIGHT))/((double)linesToDraw))*20.0)/20.0;
 	double windowMiddle = ((double)glutGet(GLUT_WINDOW_WIDTH))/2.0;
 	double drawMiddle = (((double)VISIBLE_DOTS)*upscaleVal)/2.0;
-	double drawHeight = ((double)VISIBLE_LINES)*upscaleVal;
+	double drawHeight = ((double)linesToDraw)*upscaleVal;
 
 	glBegin(GL_QUADS);
 		glTexCoord2f(0,0); glVertex2f(windowMiddle-drawMiddle,drawHeight);

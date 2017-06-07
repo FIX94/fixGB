@@ -9,7 +9,7 @@
 #define _ppu_h_
 
 void ppuInit();
-bool ppuCycle();
+void ppuCycle();
 bool ppuDrawDone();
 uint8_t ppuGetVRAMBank8(uint16_t addr);
 uint8_t ppuGetVRAMNoBank8(uint16_t addr);
@@ -22,5 +22,6 @@ void ppuSetReg8(uint16_t addr, uint8_t val);
 bool ppuInVBlank();
 bool ppuInHBlank();
 void ppuDumpMem();
+void ppuDrawGBSTrackNum(uint8_t cTrack, uint8_t trackTotal);
 
 #endif

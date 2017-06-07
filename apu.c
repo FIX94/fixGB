@@ -152,11 +152,11 @@ void apuDeinitBufs()
 	apuOutBuf = NULL;
 }
 
-extern bool allowCgbRegs;
+extern bool gbCgbMode;
 void apuInit()
 {
 	memset(APU_IO_Reg,0,0x50);
-	if(allowCgbRegs) //essentially 50% duty pulse on CGB
+	if(gbCgbMode) //essentially 50% duty pulse on CGB
 		memcpy(APU_IO_Reg+0x30,startWavSetCGB,0x10);
 	else //relatively random audio pattern on DMG
 		memcpy(APU_IO_Reg+0x30,startWavSetDMG,0x10);

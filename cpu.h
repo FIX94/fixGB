@@ -9,7 +9,7 @@
 #define _cpu_h_
 
 void cpuInit();
-bool cpuCycle();
+void cpuCycle();
 uint16_t cpuCurPC();
 void cpuSetSpeed(bool cgb);
 void cpuLoadGBS(uint8_t song);

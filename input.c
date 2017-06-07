@@ -28,7 +28,7 @@ void inputSet8(uint16_t addr, uint8_t in)
 	(void)addr;
 	modeSelect = ((in)>>4)&0x3;
 	#if DEBUG_INPUT
-	printf("Set %02x->%02x\n",in,modeSelect);
+	printf("Input: Set %02x->%02x\n",in,modeSelect);
 	#endif
 }
 

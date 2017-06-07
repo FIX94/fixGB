@@ -26,7 +26,7 @@ extern uint16_t gbsInitAddr;
 extern uint16_t gbsPlayAddr;
 extern uint16_t gbsSP;
 extern uint8_t cpuTimer;
-extern bool allowCgbRegs;
+extern bool gbCgbMode;
 
 //used externally
 bool cpuDoStopSwitch = false;
@@ -41,11 +41,11 @@ static bool gbsInitRet, gbsPlayRet;
 
 static uint8_t sub_in_val;
 static bool irqEnable;
-static bool cpuHaltLoop,cpuStopLoop,cpuHaltBug;
+static bool cpuHaltLoop,cpuStopLoop,cpuHaltBug,cpuPrevInAny;
 void cpuInit()
 {
 	sub_in_val=0,cpuTmp=0,cpuTmp16=0;
-	if(allowCgbRegs) //From GBC Bootrom
+	if(gbCgbMode) //From GBC Bootrom
 		a=0x11,b=0,c=0,d=0,e=0x08,f=0x80,h=0,l=0x7C;
 	else //From GB Bootrom
 		a=0x01,b=0,c=0x13,d=0,e=0xD8,f=0xB0,h=1,l=0x4D;
@@ -56,6 +56,7 @@ void cpuInit()
 	cpuStopLoop = false;
 	cpuHaltBug = false;
 	cpuCgbSpeed = false;
+	cpuPrevInAny = false;
 	cpuSetupActionArr();
 	//gbs stuff
 	gbsInitRet = false; //for first init
@@ -597,6 +598,12 @@ void cpuDAA(uint8_t *reg)
 	*reg = (uint8_t)in;
 }
 
+static void cpuSetStopLoop()
+{
+	printf("CPU: Frozen until Button is pressed\n");
+	cpuStopLoop = true;
+}
+
 static void cpuSTOP(uint8_t *none)
 {
 	(void)none;
@@ -607,7 +614,7 @@ static void cpuSTOP(uint8_t *none)
 		cpuDoStopSwitch = false;
 	}
 	else
-		cpuStopLoop = true;
+		cpuSetStopLoop();
 	//takes up 2 instructions?
 	pc++;
 }
@@ -1065,13 +1072,13 @@ bool cpuHandleIrqUpdates()
 	return false;
 }
 static uint8_t curInstr;
-bool cpuGetInstruction()
+void cpuGetInstruction()
 {
 	if(cpuHandleIrqUpdates())
 	{
 		cpuHaltLoop = false;
 		cpu_arr_pos = 0;
-		return true;
+		return;
 	}
 	if(gbEmuGBSPlayback)
 	{
@@ -1083,7 +1090,7 @@ bool cpuGetInstruction()
 			gbsInitRet = true; //allow play call
 			cpu_action_arr = cpu_nop_arr;
 			cpu_arr_pos = 0;
-			return true;
+			return;
 		} //play return
 		else if(pc == 0x8765)
 		{
@@ -1092,7 +1099,7 @@ bool cpuGetInstruction()
 			gbsPlayRet = true; //allow next play call
 			cpu_action_arr = cpu_nop_arr;
 			cpu_arr_pos = 0;
-			return true;
+			return;
 		}
 	}
 	if(cpuHaltLoop)
@@ -1102,50 +1109,50 @@ bool cpuGetInstruction()
 			cpuHaltLoop = false;
 		cpu_action_arr = cpu_nop_arr;
 		cpu_arr_pos = 0;
-		return true;
+		return;
 	}
 	if(cpuStopLoop)
 	{
-		if(inputAny())
+		bool cpuInAny = inputAny();
+		if(cpuInAny && !cpuPrevInAny)
 			cpuStopLoop = false;
+		cpuPrevInAny = cpuInAny;
 		cpu_action_arr = cpu_nop_arr;
 		cpu_arr_pos = 0;
-		return true;
+		return;
 	}
 	curInstr = memGet8(pc);
 	cpu_action_arr = cpu_instr_arr[curInstr];
 	if(cpu_action_arr == NULL)
 	{
-		printf("Unsupported Instruction at %04x:%02x!\n", pc-1,curInstr);
-		return false;
+		printf("CPU Error: Unsupported Instruction at %04x:%02x!\n", pc-1,curInstr);
+		cpu_action_arr = cpu_nop_arr;
+		cpuSetStopLoop();
 	}
 	cpu_arr_pos = 0;
 	cpu_action_func = cpu_actions_arr[curInstr];
-	
+
 	//if(pc==0xABC || pc == 0xAC1 || pc == 0x5E0E || pc == 0x5E0F)
 	//	printf("%04x %02x a %02x b %02x hl %04x\n", pc, curInstr, a, b, (l|(h<<8)));
 	//HALT bug: PC doesnt increase after instruction is parsed!
 	if(!cpuHaltBug) pc++;
 	cpuHaltBug = false;
-
-	return true;
 }
 
 /* Main CPU Interpreter */
 bool cpuDmaHalt = false;
 
-bool cpuCycle()
+void cpuCycle()
 {
-	bool cycleret = true;
 	if(cpuDmaHalt)
-		return cycleret;
+		return;
 	uint8_t cpu_action, sub_instr;
 	cpu_action = cpu_action_arr[cpu_arr_pos];
 	cpu_arr_pos++;
 	switch(cpu_action)
 	{
 		case CPU_GET_INSTRUCTION:
-			cycleret = cpuGetInstruction();
+			cpuGetInstruction();
 			break;
 		case CPU_GET_SUBINSTRUCTION:
 			sub_instr = memGet8(pc++);
@@ -1180,8 +1187,10 @@ bool cpuCycle()
 					cpu_action_arr = cpu_imm_a_arr;
 					break;
 				default: //should never happen
-					printf("Unknown sub %02x\n", sub_instr);
-					return false;
+					printf("CPU Error: Unknown sub %02x\n", sub_instr);
+					cpu_action_arr = cpu_nop_arr;
+					cpuSetStopLoop();
+					break;
 			}
 			//set sub func
 			switch(sub_instr>>3)
@@ -1234,35 +1243,35 @@ bool cpuCycle()
 			break;
 		case CPU_ACTION_GET_INSTRUCTION:
 			cpu_action_func(&cpuTmp);
-			cycleret = cpuGetInstruction();
+			cpuGetInstruction();
 			break;
 		case CPU_A_ACTION_GET_INSTRUCTION:
 			cpu_action_func(&a);
-			cycleret = cpuGetInstruction();
+			cpuGetInstruction();
 			break;
 		case CPU_B_ACTION_GET_INSTRUCTION:
 			cpu_action_func(&b);
-			cycleret = cpuGetInstruction();
+			cpuGetInstruction();
 			break;
 		case CPU_C_ACTION_GET_INSTRUCTION:
 			cpu_action_func(&c);
-			cycleret = cpuGetInstruction();
+			cpuGetInstruction();
 			break;
 		case CPU_D_ACTION_GET_INSTRUCTION:
 			cpu_action_func(&d);
-			cycleret = cpuGetInstruction();
+			cpuGetInstruction();
 			break;
 		case CPU_E_ACTION_GET_INSTRUCTION:
 			cpu_action_func(&e);
-			cycleret = cpuGetInstruction();
+			cpuGetInstruction();
 			break;
 		case CPU_H_ACTION_GET_INSTRUCTION:
 			cpu_action_func(&h);
-			cycleret = cpuGetInstruction();
+			cpuGetInstruction();
 			break;
 		case CPU_L_ACTION_GET_INSTRUCTION:
 			cpu_action_func(&l);
-			cycleret = cpuGetInstruction();
+			cpuGetInstruction();
 			break;
 		case CPU_ACTION_WRITE:
 			cpu_action_func(&cpuTmp);
@@ -1568,27 +1577,27 @@ bool cpuCycle()
 		case CPU_DI_GET_INSTRUCTION:
 			//printf("Disabled IRQs at %04x\n", pc);
 			irqEnable = false;
-			cycleret = cpuGetInstruction();
+			cpuGetInstruction();
 			break;
 		case CPU_EI_GET_INSTRUCTION:
 			//printf("Enabled IRQs and jmp to %04x ",pc);
-			cycleret = cpuGetInstruction();
+			cpuGetInstruction();
 			//printf("%04x\n",pc);
 			irqEnable = true;
 			break;
 		case CPU_SCF_GET_INSTRUCTION:
 			f |= P_FLAG_C;
 			f &= ~(P_FLAG_H|P_FLAG_N);
-			cycleret = cpuGetInstruction();
+			cpuGetInstruction();
 			break;
 		case CPU_CCF_GET_INSTRUCTION:
 			f ^= P_FLAG_C;
 			f &= ~(P_FLAG_H|P_FLAG_N);
-			cycleret = cpuGetInstruction();
+			cpuGetInstruction();
 			break;
 		case CPU_PC_FROM_HL_GET_INSTRUCTION:
 			pc = (l|(h<<8));
-			cycleret = cpuGetInstruction();
+			cpuGetInstruction();
 			break;
 		case CPU_PC_FROM_T16:
 			pc = cpuTmp16;
@@ -1606,7 +1615,6 @@ bool cpuCycle()
 			if(!(f & P_FLAG_C)) cpu_arr_pos+=3;
 			break;
 	}
-	return cycleret;
 }
 
 uint16_t cpuCurPC()
