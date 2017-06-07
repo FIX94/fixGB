@@ -26,7 +26,7 @@
 #define DEBUG_KEY 0
 #define DEBUG_LOAD_INFO 1
 
-static const char *VERSION_STRING = "fixGB Alpha v0.5.5";
+static const char *VERSION_STRING = "fixGB Alpha v0.6";
 static char window_title[256];
 static char window_title_pause[256];
 static int window_handle = -1;
