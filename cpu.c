@@ -1020,8 +1020,6 @@ void cpuSetupActionArr()
 	cpu_action_func = cpuNoAction;
 }
 
-bool firstIrq = false, secondIrq = false;
-
 bool cpuHandleIrqUpdates()
 {
 	if(gbEmuGBSPlayback) return false;
@@ -1033,8 +1031,6 @@ bool cpuHandleIrqUpdates()
 		//printf("Beep Bop Interrupt 40 and jmp from %04x\n", pc);
 		cpu_action_arr = cpu_rst40_arr;
 		irqEnable = false;
-		//if(firstIrq) secondIrq = true;
-		//firstIrq = true;
 		return true;
 	}
 	else if(irqList & 2)
@@ -1648,6 +1644,8 @@ void cpuPlayGBS()
 	memSet8(sp, 0x87);
 	sp--;
 	memSet8(sp, 0x65);
+	//IMPORTANT: some GBS files dont work without this
+	a = 0, b = 0, c = 0, d = 0, e = 0, h = 0, l = 0;
 	//jump to play
 	pc = gbsPlayAddr;
 	cpu_action_arr = cpu_nop_arr;
@@ -1672,6 +1670,8 @@ void cpuLoadGBS(uint8_t song)
 	memSet8(sp, 0x87);
 	sp--;
 	memSet8(sp, 0x64);
+	//IMPORTANT: some GBS files dont work without this
+	a = 0, b = 0, c = 0, d = 0, e = 0, h = 0, l = 0;
 	//set song and init routine
 	a = song;
 	pc = gbsInitAddr;

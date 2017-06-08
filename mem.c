@@ -277,6 +277,7 @@ bool memInit(bool romcheck, bool gbs)
 			extMemEnabled = true;
 			printf("Mem: 8KB RAM allowed\n");
 			extTotalSize = 0x2000;
+			extAddrMask = 0x1FFF;
 			extMask = 1;
 			printf("Mem: ROM and RAM (GBS)\n");
 			mbcInit(MBC_TYPE_GBS);
@@ -432,97 +433,97 @@ bool memInit(bool romcheck, bool gbs)
 	uint32_t addr;
 	for(addr = 0; addr < 0x10000; addr++)
 	{
-		if(addr < 0x4000) //Cartridge ROM
+		if(addr < 0x4000) //0x0000 - 0x3FFF = Cartridge ROM
 		{
 			memGet8ptr[addr] = memGetROMNoBank8;
 			memSet8ptr[addr] = mbcSet8;
 		}
-		else if(addr < 0x8000) //Cartridge ROM (possibly banked)
+		else if(addr < 0x8000) //0x4000 - 0x7FFF = Cartridge ROM (possibly banked)
 		{
 			memGet8ptr[addr] = bankUsed?memGetROMBank8:memGetROMNoBank8;
 			memSet8ptr[addr] = mbcSet8;
 		}
-		else if(addr < 0xA000) //PPU VRAM
+		else if(addr < 0xA000) //0x8000 - 0x9FFF = PPU VRAM
 		{
 			memGet8ptr[addr] = gbCgbMode?ppuGetVRAMBank8:ppuGetVRAMNoBank8;
 			memSet8ptr[addr] = gbCgbMode?ppuSetVRAMBank8:ppuSetVRAMNoBank8;
 		}
-		else if(addr < 0xC000) //Cardridge RAM
+		else if(addr < 0xC000) //0xA000 - 0xBFFF = Cardridge RAM
 		{
 			memGet8ptr[addr] = mbcGetRAM8;
 			memSet8ptr[addr] = mbcSetRAM8;
 		}
-		else if(addr < 0xD000) //Main RAM
+		else if(addr < 0xD000) //0xC000 - 0xCFFF = Main RAM
 		{
 			memGet8ptr[addr] = memGetRAMNoBank8;
 			memSet8ptr[addr] = memSetRAMNoBank8;
 		}
-		else if(addr < 0xE000) //Main RAM (possibly banked)
+		else if(addr < 0xE000) //0xD000 - 0xDFFF = Main RAM (possibly banked)
 		{
 			memGet8ptr[addr] = gbCgbMode?memGetRAMBank8:memGetRAMNoBank8;
 			memSet8ptr[addr] = gbCgbMode?memSetRAMBank8:memSetRAMNoBank8;
 		}
-		else if(addr < 0xF000) //Echo Main RAM
+		else if(addr < 0xF000) //0xE000 - 0xEFFF = Echo Main RAM
 		{
 			memGet8ptr[addr] = memGetRAMNoBank8;
 			memSet8ptr[addr] = memSetRAMNoBank8;
 		}
-		else if(addr < 0xFE00) //Echo Main RAM (possibly banked)
+		else if(addr < 0xFE00) //0xF000 - 0xFCFF = Echo Main RAM (possibly banked)
 		{
 			memGet8ptr[addr] = gbCgbMode?memGetRAMBank8:memGetRAMNoBank8;
 			memSet8ptr[addr] = gbCgbMode?memSetRAMBank8:memSetRAMNoBank8;
 		}
-		else if(addr < 0xFEA0) //PPU OAM
+		else if(addr < 0xFEA0) //0xFE00 - 0xFE9F = PPU OAM
 		{
 			memGet8ptr[addr] = ppuGetOAM8;
 			memSet8ptr[addr] = ppuSetOAM8;
 		}
-		else if(addr < 0xFF00) //Unusable
+		else if(addr < 0xFF00) //0xFEA0 - 0xFEFF = Unusable
 		{
 			memGet8ptr[addr] = memGetInvalid8;
 			memSet8ptr[addr] = memSetInvalid8;
 		}
-		else if(addr == 0xFF00) //Inputs
+		else if(addr == 0xFF00) //FF00 = Inputs
 		{
 			memGet8ptr[addr] = inputGet8;
 			memSet8ptr[addr] = inputSet8;
 		}
-		else if(addr < 0xFF10) //General Features
+		else if(addr < 0xFF10) //0xFF01 - 0xFF0F = General Features
 		{
 			memGet8ptr[addr] = memGetGeneralReg8;
 			memSet8ptr[addr] = memSetGeneralReg8;
 		}
-		else if(addr < 0xFF40) //APU Regs
+		else if(addr < 0xFF40) //0xFF10 - 0xFF3F = APU Regs
 		{
 			memGet8ptr[addr] = apuGetReg8;
 			memSet8ptr[addr] = apuSetReg8;
 		}
-		else if(addr < 0xFF4C) //PPU Regs
+		else if(addr < 0xFF4C) //0xFF40 - 0xFF4B = PPU Regs
 		{
 			memGet8ptr[addr] = ppuGetReg8;
 			memSet8ptr[addr] = ppuSetReg8;
 		}
-		else if(addr < 0xFF68) //General CGB Features
+		else if(addr < 0xFF68) //0xFF4C - 0xFF67 = General CGB Features
 		{
 			memGet8ptr[addr] = gbCgbMode?memGetGeneralReg8:memGetInvalid8;
 			memSet8ptr[addr] = gbCgbMode?memSetGeneralReg8:memSetInvalid8;
 		}
-		else if(addr < 0xFF6C) //PPU CGB Regs
+		else if(addr < 0xFF6C) //0xFF68 - 0xFF6B = PPU CGB Regs
 		{
 			memGet8ptr[addr] = gbCgbMode?ppuGetReg8:memGetInvalid8;
 			memSet8ptr[addr] = gbCgbMode?ppuSetReg8:memSetInvalid8;
 		}
-		else if(addr < 0xFF80) //General CGB Features
+		else if(addr < 0xFF80) //0xFF6C - 0xFF7F = General CGB Features
 		{
 			memGet8ptr[addr] = memGetGeneralReg8;
 			memSet8ptr[addr] = memSetGeneralReg8;
 		}
-		else if(addr < 0xFFFF) //High RAM
+		else if(addr < 0xFFFF) //0xFF80 - 0xFFFE = High RAM
 		{
 			memGet8ptr[addr] = memGetHiRAM8;
 			memSet8ptr[addr] = memSetHiRAM8;
 		}
-		else if(addr == 0xFFFF) //General Features
+		else if(addr == 0xFFFF) //FFFF = General Features
 		{
 			memGet8ptr[addr] = memGetGeneralReg8;
 			memSet8ptr[addr] = memSetGeneralReg8;

@@ -26,10 +26,9 @@
 #define DEBUG_KEY 0
 #define DEBUG_LOAD_INFO 1
 
-static const char *VERSION_STRING = "fixGB Alpha v0.6";
+static const char *VERSION_STRING = "fixGB Alpha v0.6.1";
 static char window_title[256];
 static char window_title_pause[256];
-static int window_handle = -1;
 
 static void gbEmuDisplayFrame(void);
 static void gbEmuMainLoop(void);
@@ -115,6 +114,8 @@ int main(int argc, char** argv)
 		gbsSP = (tmpROM[0xC])|(tmpROM[0xD]<<8);
 		//should give more than enough room for everything
 		gbsRomSize = (fsize-0x70+gbsLoadAddr+0x7FFF)&(~0x7FFF);
+		//printf("Main: gbsLoadAddr %04x gbsInitAddr %04x gbsPlayAddr %04x gbsSP %04x\n",
+		//	gbsLoadAddr, gbsInitAddr, gbsPlayAddr, gbsSP);
 		emuGBROM = malloc(gbsRomSize);
 		memset(emuGBROM,0xFF,gbsRomSize);
 		memcpy(emuGBROM+gbsLoadAddr,tmpROM+0x70,fsize-0x70);
@@ -246,7 +247,7 @@ int main(int argc, char** argv)
 	glutInit(&argc, argv);
 	glutInitWindowSize(VISIBLE_DOTS*scaleFactor, linesToDraw*scaleFactor);
 	glutInitDisplayMode(GLUT_DOUBLE | GLUT_RGBA);
-	window_handle = glutCreateWindow(gbPause ? window_title_pause : window_title);
+	glutCreateWindow(gbPause ? window_title_pause : window_title);
 	audioInit();
 	atexit(&gbEmuDeinit);
 	glutKeyboardFunc(&gbEmuHandleKeyDown);
@@ -289,9 +290,6 @@ static void gbEmuDeinit(void)
 	if(emuSaveName != NULL)
 		free(emuSaveName);
 	emuSaveName = NULL;
-	if(window_handle >= 0)
-		glutDestroyWindow(window_handle);
-	window_handle = -1;
 	//printf("Bye!\n");
 }
 

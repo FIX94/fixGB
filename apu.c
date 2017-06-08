@@ -62,6 +62,7 @@ static bool p1dacenable, p2dacenable, wavdacenable, noisedacenable;
 static bool p1enable, p2enable, wavenable, noiseenable;
 static bool soundEnabled;
 static bool noiseMode1;
+static bool wavEqual;
 
 static envelope_t p1Env, p2Env, noiseEnv;
 
@@ -185,6 +186,7 @@ void apuInit()
 	p1dacenable = false; p2dacenable = false;
 	wavdacenable = false; noisedacenable = false;
 	noiseMode1 = false;
+	wavEqual = false;
 	//GB Bootrom
 	soundEnabled = true;
 	APU_IO_Reg[0x24] = 0x77;
@@ -283,7 +285,7 @@ bool apuCycle()
 		else
 			v &= 0xF;
 		v>>=wavVolShift;
-		if(v && wavFreq > 0 && wavFreq < 0x7FF)
+		if(v && ((wavFreq > 0 && wavFreq < 0x7FF) || wavEqual))
 		{
 			curWavOut = v;
 			if(APU_IO_Reg[0x25] & WAV_ENABLE_LEFT)
@@ -603,6 +605,10 @@ void apuSetReg8(uint16_t addr, uint8_t val)
 			APU_IO_Reg[0x30+(wavCycle>>1)] = val;
 		else
 			APU_IO_Reg[reg] = val;
+		//allow for manual wav inputs if all wav inputs are equal
+		wavEqual = ((*(uint32_t*)(APU_IO_Reg+0x30) == *(uint32_t*)(APU_IO_Reg+0x34)) &&
+					(*(uint32_t*)(APU_IO_Reg+0x34) == *(uint32_t*)(APU_IO_Reg+0x38)) &&
+					(*(uint32_t*)(APU_IO_Reg+0x38) == *(uint32_t*)(APU_IO_Reg+0x3C)) );
 		return;
 	}
 	//dont even bother with the switch if sound is off

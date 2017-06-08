@@ -104,6 +104,13 @@ void mbcInit(uint8_t type)
 			mbcSetRAM8 = mbcSetExtRAMNoBank8;
 			printf("MBC: Set RAM (No Bank) Functions\n");
 		}
+		else if(type == MBC_TYPE_GBS)
+		{
+			//GBS has 0x2000 bytes RAM but has no Bank or I/O Regs!
+			mbcGetRAM8 = mbcGetExtRAMNoBank8;
+			mbcSetRAM8 = mbcSetExtRAMNoBank8;
+			printf("MBC: Set GBS RAM (No Bank) Functions\n");
+		}
 		else
 		{
 			mbcGetRAM8 = mbcGetExtRAMBank8;
