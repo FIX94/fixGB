@@ -154,6 +154,7 @@ void apuDeinitBufs()
 }
 
 extern bool gbCgbMode;
+extern bool gbCgbBootrom;
 void apuInit()
 {
 	memset(APU_IO_Reg,0,0x50);
@@ -179,7 +180,7 @@ void apuInit()
 
 	memset(&p1Sweep,0,sizeof(sweep_t));
 
-	p1haltloop = false;	p2haltloop = false;
+	p1haltloop = false; p2haltloop = false;
 	wavhaltloop = false; noisehaltloop = false;
 	p1enable = false; p2enable = false;
 	wavenable = false; noiseenable = false;
@@ -187,10 +188,14 @@ void apuInit()
 	wavdacenable = false; noisedacenable = false;
 	noiseMode1 = false;
 	wavEqual = false;
-	//GB Bootrom
-	soundEnabled = true;
-	APU_IO_Reg[0x24] = 0x77;
-	APU_IO_Reg[0x25] = 0xF3;
+	if(gbCgbBootrom)
+		soundEnabled = false;
+	else //GB Bootrom
+	{
+		soundEnabled = true;
+		APU_IO_Reg[0x24] = 0x77;
+		APU_IO_Reg[0x25] = 0xF3;
+	}
 }
 
 #if AUDIO_FLOAT

@@ -40,6 +40,7 @@
 #define PPU_TILE_PRIO (1<<7)
 
 static void ppuDrawDotDMG(size_t drawPos);
+static void ppuDrawDotCGB_DMGMode(size_t drawPos);
 static void ppuDrawDotCGB(size_t drawPos);
 
 typedef void (*drawFunc)(size_t);
@@ -48,6 +49,8 @@ static drawFunc ppuDrawDot = NULL;
 //from main.c
 extern uint32_t textureImage[0x5A00];
 extern bool gbCgbMode;
+extern bool gbCgbBootrom;
+extern bool gbAllowInvVRAM;
 //used externally
 uint8_t ppuCgbBank = 0;
 
@@ -92,17 +95,26 @@ static const uint8_t defaultCGBObjPal[0x40] = {
 void ppuInit()
 {
 	//Set start line
-	if(gbCgbMode)
+	if(gbCgbBootrom)
 	{
-		ppuClock = 170;
-		ppuMode = 1;
-		ppuLines = 144;
+		ppuClock = 4;
+		ppuMode = 2;
+		ppuLines = 0;
 	}
 	else
 	{
-		ppuClock = 400;
-		ppuMode = 1;
-		ppuLines = 153;
+		if(gbCgbMode)
+		{
+			ppuClock = 170;
+			ppuMode = 1;
+			ppuLines = 144;
+		}
+		else
+		{
+			ppuClock = 400;
+			ppuMode = 1;
+			ppuLines = 153;
+		}
 	}
 	ppuDots = 0;
 	ppuLineMatch = 0;
@@ -116,8 +128,7 @@ void ppuInit()
 	ppuVBlankTriggered = false;
 	ppuHBlank = false;
 	ppuHBlankTriggered = false;
-	//set draw method depending on DMG or CGB Mode
-	ppuDrawDot = gbCgbMode?ppuDrawDotCGB:ppuDrawDotDMG;
+	ppuInitDrawPointer();
 	//init buffers
 	memset(PPU_Reg,0,12);
 	memset(PPU_OAM,0,0xA0);
@@ -130,8 +141,11 @@ void ppuInit()
 	PPU_BGRLUT[2] = 0xFF555555; //Dark Gray
 	PPU_BGRLUT[3] = 0xFF000000; //Black
 	//from GBC Bootrom
-	memcpy(PPU_CGB_BGPAL,defaultCGBBgPal,0x40);
-	memcpy(PPU_CGB_OBJPAL,defaultCGBObjPal,0x40);
+	if(gbCgbMode && !gbCgbBootrom)
+	{
+		memcpy(PPU_CGB_BGPAL,defaultCGBBgPal,0x40);
+		memcpy(PPU_CGB_OBJPAL,defaultCGBObjPal,0x40);
+	}
 	//generate CGB BGR32 LUT
 	uint8_t r, g, b;
 	uint32_t cgb_palpos = 0;
@@ -151,11 +165,25 @@ void ppuInit()
 			}
 		}
 	}
-	//From GB Bootrom
-	PPU_Reg[0] = 0x91;
-	PPU_Reg[7] = 0xFC;
-	PPU_Reg[8] = 0xFF;
-	PPU_Reg[9] = 0xFF;
+	if(!gbCgbBootrom)
+	{
+		//From GB Bootrom
+		PPU_Reg[0] = 0x91;
+		PPU_Reg[7] = 0xFC;
+		PPU_Reg[8] = 0xFF;
+		PPU_Reg[9] = 0xFF;
+	}
+}
+
+void ppuInitDrawPointer()
+{
+	//set draw method depending on DMG or CGB Mode
+	if(gbCgbMode)
+		ppuDrawDot = ppuDrawDotCGB;
+	else if(gbCgbBootrom)
+		ppuDrawDot = ppuDrawDotCGB_DMGMode;
+	else
+		ppuDrawDot = ppuDrawDotDMG;
 }
 
 extern bool gbEmuGBSPlayback;
@@ -302,21 +330,21 @@ bool ppuDrawDone()
 
 uint8_t ppuGetVRAMBank8(uint16_t addr)
 {
-	if(!(PPU_Reg[0] & PPU_ENABLE) || (ppuMode != 3))
+	if(gbAllowInvVRAM || !(PPU_Reg[0] & PPU_ENABLE) || (ppuMode != 3))
 		return PPU_VRAM[(ppuCgbBank<<13)|(addr&0x1FFF)];
 	return 0xFF;
 }
 
 uint8_t ppuGetVRAMNoBank8(uint16_t addr)
 {
-	if(!(PPU_Reg[0] & PPU_ENABLE) || (ppuMode != 3))
+	if(gbAllowInvVRAM || !(PPU_Reg[0] & PPU_ENABLE) || (ppuMode != 3))
 		return PPU_VRAM[addr&0x1FFF];
 	return 0xFF;
 }
 
 uint8_t ppuGetOAM8(uint16_t addr)
 {
-	if(!(PPU_Reg[0] & PPU_ENABLE) || (ppuMode == 0) || (ppuMode == 1))
+	if(gbAllowInvVRAM || !(PPU_Reg[0] & PPU_ENABLE) || (ppuMode == 0) || (ppuMode == 1))
 		return PPU_OAM[addr&0xFF];
 	return 0xFF;
 }
@@ -337,13 +365,13 @@ uint8_t ppuGetReg8(uint16_t addr)
 		case 0x28: //FF68
 			return ppuCgbBgPalPos|0x40;
 		case 0x29: //FF69
-			if(!(PPU_Reg[0] & PPU_ENABLE) || (ppuMode != 3))
+			if(gbAllowInvVRAM || !(PPU_Reg[0] & PPU_ENABLE) || (ppuMode != 3))
 				return PPU_CGB_BGPAL[ppuCgbBgPalPos&0x3F];
 			return 0xFF;
 		case 0x2A: //FF6A
 			return ppuCgbObjPalPos|0x40;
 		case 0x2B: //FF6B
-			if(!(PPU_Reg[0] & PPU_ENABLE) || (ppuMode != 3))
+			if(gbAllowInvVRAM || !(PPU_Reg[0] & PPU_ENABLE) || (ppuMode != 3))
 				return PPU_CGB_OBJPAL[ppuCgbObjPalPos&0x3F];
 			return 0xFF;
 		default:
@@ -354,19 +382,19 @@ uint8_t ppuGetReg8(uint16_t addr)
 
 void ppuSetVRAMBank8(uint16_t addr, uint8_t val)
 {
-	if(!(PPU_Reg[0] & PPU_ENABLE) || (ppuMode != 3))
+	if(gbAllowInvVRAM || !(PPU_Reg[0] & PPU_ENABLE) || (ppuMode != 3))
 		PPU_VRAM[(ppuCgbBank<<13)|(addr&0x1FFF)] = val;
 }
 
 void ppuSetVRAMNoBank8(uint16_t addr, uint8_t val)
 {
-	if(!(PPU_Reg[0] & PPU_ENABLE) || (ppuMode != 3))
+	if(gbAllowInvVRAM || !(PPU_Reg[0] & PPU_ENABLE) || (ppuMode != 3))
 		PPU_VRAM[addr&0x1FFF] = val;
 }
 
 void ppuSetOAM8(uint16_t addr, uint8_t val)
 {
-	if(!(PPU_Reg[0] & PPU_ENABLE) || (ppuMode == 0) || (ppuMode == 1))
+	if(gbAllowInvVRAM || !(PPU_Reg[0] & PPU_ENABLE) || (ppuMode == 0) || (ppuMode == 1))
 		PPU_OAM[addr&0xFF] = val;
 }
 
@@ -410,7 +438,7 @@ void ppuSetReg8(uint16_t addr, uint8_t val)
 			ppuCgbBgPalPos = val;
 			break;
 		case 0x29: //FF69
-			if(!(PPU_Reg[0] & PPU_ENABLE) || (ppuMode != 3))
+			if(gbAllowInvVRAM || !(PPU_Reg[0] & PPU_ENABLE) || (ppuMode != 3))
 			{
 				//printf("BG Write %02x to %02x\n", val, ppuCgbBgPalPos&0x3F);
 				PPU_CGB_BGPAL[ppuCgbBgPalPos&0x3F] = val;
@@ -422,7 +450,7 @@ void ppuSetReg8(uint16_t addr, uint8_t val)
 			ppuCgbObjPalPos = val;
 			break;
 		case 0x2B: //FF6B
-			if(!(PPU_Reg[0] & PPU_ENABLE) || (ppuMode != 3))
+			if(gbAllowInvVRAM || !(PPU_Reg[0] & PPU_ENABLE) || (ppuMode != 3))
 			{
 				//printf("OBJ Write %02x to %02x\n", val, ppuCgbObjPalPos&0x3F);
 				PPU_CGB_OBJPAL[ppuCgbObjPalPos&0x3F] = val;
@@ -635,6 +663,163 @@ static void ppuDrawDotDMG(size_t drawPos)
 		tCol = ppuDoSpritesDMG(color, tCol);
 	//copy grayscale value from BGR32 LUT
 	textureImage[drawPos] = PPU_BGRLUT[tCol&3];
+}
+
+//follows same logic as DMG function, only returned color is different
+static uint16_t ppuDoSpritesCGB_DMGMode(uint8_t color, uint16_t cgbRGB)
+{
+	uint8_t i;
+	uint8_t cSpriteAnd = (PPU_Reg[0] & PPU_SPRITE_8_16) ? 15 : 7;
+	uint8_t cPrioSpriteX = 0xFF;
+	uint8_t ChrRegA = 0, ChrRegB = 0;
+	for(i = 0; i < ppuOAM2pos; i++)
+	{
+		uint8_t OAMcXpos = PPU_OAM2[(i<<2)+1];
+		if(OAMcXpos >= 168)
+			continue;
+		int16_t cmpPos = ((int16_t)OAMcXpos)-8;
+		if(cmpPos <= ppuDots && (cmpPos+8) > ppuDots)
+		{
+			uint8_t cSpriteByte3 = PPU_OAM2[(i<<2)+3];
+			uint8_t tVal = PPU_OAM2[(i<<2)+2];
+
+			uint8_t OAMcYpos = PPU_OAM2[(i<<2)];
+			uint8_t cmpYPos = OAMcYpos-16;
+			uint8_t cSpriteY = (ppuLines - cmpYPos)&cSpriteAnd;
+			uint8_t cSpriteAdd = 0; //used to select which 8 by 16 tile
+			if(cSpriteY > 7) //8 by 16 select
+			{
+				cSpriteAdd = 16;
+				cSpriteY &= 7;
+			}
+			if(PPU_Reg[0] & PPU_SPRITE_8_16)
+				tVal &= ~1; //clear low bit since its ALL 8 by 16 (2x the space)
+			if(cSpriteByte3 & PPU_TILE_FLIP_Y)
+			{
+				cSpriteY ^= 7;
+				if(PPU_Reg[0] & PPU_SPRITE_8_16)
+					cSpriteAdd ^= 16; //8 by 16 select
+			}
+			uint16_t tPos = tVal<<4;
+			tPos+=(cSpriteY)<<1;
+
+			ChrRegA = PPU_VRAM[(tPos+cSpriteAdd)&0x1FFF];
+			ChrRegB = PPU_VRAM[(tPos+cSpriteAdd+1)&0x1FFF];
+
+			uint8_t cSpriteX = (ppuDots - OAMcXpos)&7;
+			if(cSpriteByte3 & PPU_TILE_FLIP_X)
+				cSpriteX ^= 7;
+			uint8_t sprCol = 0;
+			if(ChrRegA & (0x80>>cSpriteX))
+				sprCol |= 1;
+			if(ChrRegB & (0x80>>cSpriteX))
+				sprCol |= 2;
+			//found possible candidate to display
+			if(sprCol != 0)
+			{
+				//there already was a sprite set with lower X
+				if(cPrioSpriteX < OAMcXpos)
+					continue;
+				//sprite has highest priority, return sprite
+				if((cSpriteByte3 & PPU_TILE_PRIO) == 0)
+				{
+					uint8_t pByte;
+					//sprite so far has highest prio so set color
+					if(cSpriteByte3 & PPU_TILE_DMG_PAL)
+						pByte = ((PPU_Reg[9]>>(sprCol<<1))&3)<<1;
+					else
+						pByte = ((PPU_Reg[8]>>(sprCol<<1))&3)<<1;
+					cgbRGB = (PPU_CGB_OBJPAL[pByte])|(PPU_CGB_OBJPAL[pByte+1]<<8);
+					//keep looking if there is a lower X
+					cPrioSpriteX = OAMcXpos;
+					continue;
+				} //sprite has low priority and BG is not 0, keep BG for now
+				else if((color&3) != 0)
+					continue;
+				uint8_t pByte;
+				//background is 0 so set color
+				if(cSpriteByte3 & PPU_TILE_DMG_PAL)
+					pByte = ((PPU_Reg[9]>>(sprCol<<1))&3)<<1;
+				else
+					pByte = ((PPU_Reg[8]>>(sprCol<<1))&3)<<1;
+				cgbRGB = (PPU_CGB_OBJPAL[pByte])|(PPU_CGB_OBJPAL[pByte+1]<<8);
+				//keep looking if there is a lower X
+				cPrioSpriteX = OAMcXpos;
+				continue;
+			}
+			//Sprite is 0, keep looking for sprites
+		}
+	}
+	return cgbRGB;
+}
+
+//follows same logic as DMG function, only displayed color is different
+static void ppuDrawDotCGB_DMGMode(size_t drawPos)
+{
+	uint8_t ChrRegA = 0, ChrRegB = 0, color = 0;
+	uint8_t pByte = (PPU_Reg[7]&3)<<1;
+	uint16_t cgbRGB = (PPU_CGB_OBJPAL[pByte])|(PPU_CGB_OBJPAL[pByte+1]<<8);
+	if(PPU_Reg[0]&PPU_BG_ENABLE)
+	{
+		uint8_t bgXPos = ppuDots+PPU_Reg[3];
+		uint8_t bgYPos = ppuLines+PPU_Reg[2];
+		uint16_t vramTilePos = ((PPU_Reg[0]&PPU_BG_TILEMAP_UP)?0x1C00:0x1800)|(((bgXPos>>3)+((bgYPos>>3)<<5))&0x3FF);
+		if(PPU_Reg[0]&PPU_BG_TILEDAT_LOW)
+		{
+			uint8_t tVal = PPU_VRAM[vramTilePos&0x1FFF];
+			uint16_t tPos = tVal<<4;
+			tPos+=(bgYPos&7)<<1;
+			ChrRegA = PPU_VRAM[(tPos)&0x1FFF];
+			ChrRegB = PPU_VRAM[(tPos+1)&0x1FFF];
+		}
+		else
+		{
+			int8_t tVal = (int8_t)PPU_VRAM[vramTilePos&0x1FFF];
+			int16_t tPos = tVal<<4;
+			tPos+=(bgYPos&7)<<1;
+			ChrRegA = PPU_VRAM[(0x1000+tPos)&0x1FFF];
+			ChrRegB = PPU_VRAM[(0x1000+tPos+1)&0x1FFF];
+		}
+		if(ChrRegA & (0x80>>(bgXPos&7)))
+			color |= 1;
+		if(ChrRegB & (0x80>>(bgXPos&7)))
+			color |= 2;
+		pByte = ((PPU_Reg[7]>>(color<<1))&3)<<1;
+		cgbRGB = (PPU_CGB_BGPAL[pByte])|(PPU_CGB_BGPAL[pByte+1]<<8);
+	}
+	if(PPU_Reg[0]&PPU_WINDOW_ENABLE && (PPU_Reg[0xB]) <= ppuDots+7 && PPU_Reg[0xA] <= ppuLines)
+	{
+		uint8_t windowXPos = ppuDots+7-PPU_Reg[0xB];
+		uint8_t windowYPos = ppuLines-PPU_Reg[0xA];
+		uint16_t vramTilePos = ((PPU_Reg[0]&PPU_WINDOW_TILEMAP_UP)?0x1C00:0x1800)|(((windowXPos>>3)+((windowYPos>>3)<<5))&0x3FF);
+		if(PPU_Reg[0]&PPU_BG_TILEDAT_LOW)
+		{
+			uint8_t tVal = PPU_VRAM[vramTilePos&0x1FFF];
+			uint16_t tPos = tVal<<4;
+			tPos+=(windowYPos&7)<<1;
+			ChrRegA = PPU_VRAM[(tPos)&0x1FFF];
+			ChrRegB = PPU_VRAM[(tPos+1)&0x1FFF];
+		}
+		else
+		{
+			int8_t tVal = (int8_t)PPU_VRAM[vramTilePos&0x1FFF];
+			int16_t tPos = tVal<<4;
+			tPos+=(windowYPos&7)<<1;
+			ChrRegA = PPU_VRAM[(0x1000+tPos)&0x1FFF];
+			ChrRegB = PPU_VRAM[(0x1000+tPos+1)&0x1FFF];
+		}
+		color = 0;
+		if(ChrRegA & (0x80>>(windowXPos&7)))
+			color |= 1;
+		if(ChrRegB & (0x80>>(windowXPos&7)))
+			color |= 2;
+		pByte = ((PPU_Reg[7]>>(color<<1))&3)<<1;
+		cgbRGB = (PPU_CGB_BGPAL[pByte])|(PPU_CGB_BGPAL[pByte+1]<<8);
+	}
+	if(PPU_Reg[0]&PPU_SPRITE_ENABLE)
+		cgbRGB = ppuDoSpritesCGB_DMGMode(color, cgbRGB);
+	//copy color value from BGR32 LUT
+	textureImage[drawPos] = PPU_CGB_BGRLUT[cgbRGB&0x7FFF];
 }
 
 static uint16_t ppuDoSpritesCGB(uint8_t color, uint16_t cgbRGB)

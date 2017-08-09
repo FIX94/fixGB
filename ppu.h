@@ -9,6 +9,7 @@
 #define _ppu_h_
 
 void ppuInit();
+void ppuInitDrawPointer();
 void ppuCycle();
 bool ppuDrawDone();
 uint8_t ppuGetVRAMBank8(uint16_t addr);

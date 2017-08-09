@@ -26,7 +26,7 @@
 #define DEBUG_KEY 0
 #define DEBUG_LOAD_INFO 1
 
-static const char *VERSION_STRING = "fixGB Alpha v0.6.1";
+static const char *VERSION_STRING = "fixGB Alpha v0.7";
 static char window_title[256];
 static char window_title_pause[256];
 
@@ -53,7 +53,10 @@ uint32_t gbsRomSize = 0;
 uint16_t gbsSP = 0;
 uint8_t gbsTracksTotal = 0, gbsTMA = 0, gbsTAC = 0;
 uint8_t cpuTimer = 3;
+bool gbCgbGame = false;
 bool gbCgbMode = false;
+bool gbCgbBootrom = false;
+bool gbAllowInvVRAM = false;
 
 static bool inPause = false;
 static bool inResize = false;
@@ -124,12 +127,12 @@ int main(int argc, char** argv)
 		if(gbsTAC&0x80)
 		{
 			cpuSetSpeed(true);
-			gbCgbMode = true;
+			gbCgbGame = gbCgbMode = true;
 		}
 		else
 		{
 			cpuSetSpeed(false);
-			gbCgbMode = false;
+			gbCgbGame = gbCgbMode = false;
 		}
 		printf("Main: CGB Regs are %sallowed\n", gbCgbMode?"":"dis");
 		if(gbsTAC&4)
@@ -193,8 +196,13 @@ int main(int argc, char** argv)
 			memcpy(emuSaveName,argv[1],strlen(argv[1])+1);
 			memcpy(emuSaveName+strlen(argv[1])-2,"sav",4);
 		}
+		//Set Invalid VRAM allowed
+		gbAllowInvVRAM = (strstr(argv[1],"InvVRAM") != NULL);
+		printf("Main: Invalid VRAM Access is %sallowed\n", gbAllowInvVRAM?"":"dis");
+		gbCgbBootrom = memInitCGBBootrom();
 		//Set CGB Regs allowed
-		gbCgbMode = (emuGBROM[0x143] == 0x80 || emuGBROM[0x143] == 0xC0);
+		gbCgbGame = (emuGBROM[0x143] == 0x80 || emuGBROM[0x143] == 0xC0);
+		gbCgbMode = (gbCgbGame || gbCgbBootrom);
 		printf("Main: CGB Regs are %sallowed\n", gbCgbMode?"":"dis");
 		if(!memInit(true,false))
 		{

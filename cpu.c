@@ -27,6 +27,7 @@ extern uint16_t gbsPlayAddr;
 extern uint16_t gbsSP;
 extern uint8_t cpuTimer;
 extern bool gbCgbMode;
+extern bool gbCgbBootrom;
 
 //used externally
 bool cpuDoStopSwitch = false;
@@ -45,12 +46,22 @@ static bool cpuHaltLoop,cpuStopLoop,cpuHaltBug,cpuPrevInAny;
 void cpuInit()
 {
 	sub_in_val=0,cpuTmp=0,cpuTmp16=0;
-	if(gbCgbMode) //From GBC Bootrom
-		a=0x11,b=0,c=0,d=0,e=0x08,f=0x80,h=0,l=0x7C;
-	else //From GB Bootrom
-		a=0x01,b=0,c=0x13,d=0,e=0xD8,f=0xB0,h=1,l=0x4D;
-	sp = 0xFFFE; //Boot Stack Pointer
-	pc = 0x0100; //hardcoded ROM entrypoint
+	if(gbCgbBootrom)
+	{
+		//will get set up in Bootrom
+		a=0,b=0,c=0,d=0,e=0,f=0,h=0,l=0;
+		sp=0;
+		pc=0;
+	}
+	else
+	{
+		if(gbCgbMode) //From GBC Bootrom
+			a=0x11,b=0,c=0,d=0,e=0x08,f=0x80,h=0,l=0x7C;
+		else //From GB Bootrom
+			a=0x01,b=0,c=0x13,d=0,e=0xD8,f=0xB0,h=1,l=0x4D;
+		sp = 0xFFFE; //Boot Stack Pointer
+		pc = 0x0100; //hardcoded ROM entrypoint
+	}
 	irqEnable = false;
 	cpuHaltLoop = false;
 	cpuStopLoop = false;

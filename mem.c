@@ -43,12 +43,14 @@ static uint16_t cgbDmaDst;
 static uint8_t cgbDmaLen;
 static uint8_t memDmaClock;
 static bool cgbDmaHBlankMode;
+static bool cgbBootromEnabled = false;
 static bool timerRegEnable = false;
-
 static bool emuSaveEnabled = false;
 
 //from main.c
+extern bool gbCgbGame;
 extern bool gbCgbMode;
+extern bool gbCgbBootrom;
 extern uint8_t *emuGBROM;
 
 //from mbc.c
@@ -74,10 +76,10 @@ extern bool rtcUsed;
 
 static get8FuncT memGet8ptr[0x10000];
 static set8FuncT memSet8ptr[0x10000];
-static uint16_t memGetAddr;
-static uint16_t memSetAddr;
+static uint8_t memCGBBootrom[0x900];
 static uint8_t memGetROMBank8(uint16_t addr);
 static uint8_t memGetROMNoBank8(uint16_t addr);
+static uint8_t memGetBootROMNoBank8(uint16_t addr);
 static uint8_t memGetRAMBank8(uint16_t addr);
 static uint8_t memGetRAMNoBank8(uint16_t addr);
 static uint8_t memGetHiRAM8(uint16_t addr);
@@ -427,15 +429,19 @@ bool memInit(bool romcheck, bool gbs)
 	memDmaClock = 1;
 	cgbDmaHBlankMode = false;
 	timerRegEnable = false;
+	memInitGetSetPointers();
+	return true;
+}
+
+void memInitGetSetPointers()
+{
 	//init memGet8 and memSet8 arrays
-	memGetAddr = 0;
-	memSetAddr = 0;
 	uint32_t addr;
 	for(addr = 0; addr < 0x10000; addr++)
 	{
 		if(addr < 0x4000) //0x0000 - 0x3FFF = Cartridge ROM
 		{
-			memGet8ptr[addr] = memGetROMNoBank8;
+			memGet8ptr[addr] = cgbBootromEnabled?memGetBootROMNoBank8:memGetROMNoBank8;
 			memSet8ptr[addr] = mbcSet8;
 		}
 		else if(addr < 0x8000) //0x4000 - 0x7FFF = Cartridge ROM (possibly banked)
@@ -531,7 +537,36 @@ bool memInit(bool romcheck, bool gbs)
 		else //Should never happen
 			printf("Mem Warning: Address %04x uninitialized!\n", addr);
 	}
+}
+
+bool memInitCGBBootrom()
+{
+	FILE *f = fopen("gbc_bios.bin","rb");
+	if(!f) return false;
+	fseek(f,0,SEEK_END);
+	if(ftell(f) < 0x900)
+	{
+		fclose(f);
+		return false;
+	}
+	fseek(f,0,SEEK_SET);
+	fread(memCGBBootrom,1,0x900,f);
+	fclose(f);
+	cgbBootromEnabled = true;
 	return true;
+}
+
+void memDisableCGBBootrom(uint8_t val)
+{
+	if(val == 0x11 && cgbBootromEnabled)
+	{
+		cgbBootromEnabled = false;
+		//Update CGB/DMG Mode if needed
+		if(!gbCgbGame) gbCgbMode = false;
+		//Memory Map changes
+		memInitGetSetPointers();
+		ppuInitDrawPointer();
+	}
 }
 
 void memStartGBS()
@@ -574,6 +609,13 @@ static uint8_t memGetROMBank8(uint16_t addr)
 
 static uint8_t memGetROMNoBank8(uint16_t addr)
 {
+	return emuGBROM[addr&0x7FFF];
+}
+
+static uint8_t memGetBootROMNoBank8(uint16_t addr)
+{
+	if(addr < 0x100 || (addr >= 0x200 && addr < 0x900))
+		return memCGBBootrom[addr];
 	return emuGBROM[addr&0x7FFF];
 }
 
@@ -720,6 +762,9 @@ static void memSetGeneralReg8(uint16_t addr, uint8_t val)
 			break;
 		case 0x4F:
 			ppuCgbBank = (val&1);
+			break;
+		case 0x50:
+			memDisableCGBBootrom(val);
 			break;
 		case 0x51:
 			cgbDmaSrc = (cgbDmaSrc&0x00FF)|(val<<8);
