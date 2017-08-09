@@ -26,7 +26,7 @@
 #define DEBUG_KEY 0
 #define DEBUG_LOAD_INFO 1
 
-static const char *VERSION_STRING = "fixGB Alpha v0.7";
+static const char *VERSION_STRING = "fixGB Alpha v0.7.1";
 static char window_title[256];
 static char window_title_pause[256];
 
@@ -200,6 +200,20 @@ int main(int argc, char** argv)
 		gbAllowInvVRAM = (strstr(argv[1],"InvVRAM") != NULL);
 		printf("Main: Invalid VRAM Access is %sallowed\n", gbAllowInvVRAM?"":"dis");
 		gbCgbBootrom = memInitCGBBootrom();
+		//Verify Header CRC
+		uint8_t hdrcrc = 0;
+		uint16_t hdrpos;
+		for(hdrpos = 0x134; hdrpos < 0x14D; hdrpos++)
+			hdrcrc = hdrcrc-emuGBROM[hdrpos]-1;
+		if(hdrcrc != emuGBROM[0x14D])
+		{
+			printf("Main: WARNING: Invalid ROM Header CRC, ROM may not work\n");
+			if(gbCgbBootrom)
+			{
+				//Fix Header CRC for Bootrom
+				emuGBROM[0x14D] = hdrcrc;
+			}
+		}
 		//Set CGB Regs allowed
 		gbCgbGame = (emuGBROM[0x143] == 0x80 || emuGBROM[0x143] == 0xC0);
 		gbCgbMode = (gbCgbGame || gbCgbBootrom);
