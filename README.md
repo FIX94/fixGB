@@ -5,7 +5,8 @@ You will need freeglut as well as openal-soft to compile the project, it should 
 
 Right now GB and GBC titles using MBC1, 2, 3, 5 and HuC1 should work just fine and also save into standard .sav files.  
 You can also listen to .gbs files, changing tracks works by pressing left/right.  
-To load a file, just drag and drop the .gb/.gbc/.gbs file into the application or call it via command line like "fixGB your_rom.gb".    
+To load a file, just drag and drop the .gb/.gbc/.gbs file into the application or call it via command line like "fixGB your_rom.gb".  
+You can also use a .zip file, the first found supported file from that .zip will be used.    
 
 The GBC BIOS is supported, have it in the same folder as your .gb/.gbc file called "gbc_bios.bin", when you load a game you will get the GBC logo and sound.  
 Using the GBC BIOS allows for colors in old GB games and gives you the palette selection the original GBC had during the GBC logo as well.    

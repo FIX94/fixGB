@@ -850,10 +850,10 @@ void memDumpMainMem()
 	#endif
 }
 
-extern char *emuSaveName;
+extern char emuSaveName[1024];
 void memLoadSave()
 {
-	if(emuSaveName && (extTotalSize || rtcUsed))
+	if(emuSaveName[0] && (extTotalSize || rtcUsed))
 	{
 		emuSaveEnabled = true;
 		FILE *save = fopen(emuSaveName, "rb");
@@ -877,7 +877,7 @@ void memLoadSave()
 
 void memSaveGame()
 {
-	if(emuSaveName && ((emuSaveEnabled && extTotalSize) || rtcUsed))
+	if(emuSaveName[0] && ((emuSaveEnabled && extTotalSize) || rtcUsed))
 	{
 		FILE *save = fopen(emuSaveName, "wb");
 		if(save)

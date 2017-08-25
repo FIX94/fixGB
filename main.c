@@ -10,6 +10,7 @@
 #include <stdbool.h>
 #include <malloc.h>
 #include <inttypes.h>
+#include <ctype.h>
 #include <GL/glut.h>
 #include <GL/glext.h>
 #include <time.h>
@@ -20,15 +21,31 @@
 #include "mem.h"
 #include "apu.h"
 #include "audio.h"
-
+#if ZIPSUPPORT
+#include "unzip/unzip.h"
+#endif
 #define DEBUG_HZ 0
 #define DEBUG_MAIN_CALLS 0
 #define DEBUG_KEY 0
 #define DEBUG_LOAD_INFO 1
 
-static const char *VERSION_STRING = "fixGB Alpha v0.7.1";
+static const char *VERSION_STRING = "fixGB Alpha v0.7.2";
 static char window_title[256];
 static char window_title_pause[256];
+
+enum {
+	FTYPE_UNK = 0,
+	FTYPE_GB,
+	FTYPE_GBC,
+	FTYPE_GBS,
+#if ZIPSUPPORT
+	FTYPE_ZIP,
+#endif
+};
+
+static void gbEmuFileOpen(char *name);
+static bool gbEmuFileRead();
+static void gbEmuFileClose();
 
 static void gbEmuDisplayFrame(void);
 static void gbEmuMainLoop(void);
@@ -39,8 +56,11 @@ static void gbEmuHandleKeyUp(unsigned char key, int x, int y);
 static void gbEmuHandleSpecialDown(int key, int x, int y);
 static void gbEmuHandleSpecialUp(int key, int x, int y);
 
+static int emuFileType = FTYPE_UNK;
+static char emuFileName[1024];
 uint8_t *emuGBROM = NULL;
-char *emuSaveName = NULL;
+uint32_t emuGBROMsize = 0;
+char emuSaveName[1024];
 //used externally
 uint32_t textureImage[0x5A00];
 bool gbPause = false;
@@ -94,110 +114,30 @@ int main(int argc, char** argv)
 	puts(VERSION_STRING);
 	strcpy(window_title, VERSION_STRING);
 	memset(textureImage,0,visibleImg);
-	if(argc >= 2 && (strstr(argv[1],".gbs") != NULL || strstr(argv[1],".GBS") != NULL))
+	emuFileType = FTYPE_UNK;
+	memset(emuFileName,0,1024);
+	memset(emuSaveName,0,1024);
+	if(argc >= 2)
+		gbEmuFileOpen(argv[1]);
+	if(emuFileType == FTYPE_GB || emuFileType == FTYPE_GBC)
 	{
-		FILE *gbF = fopen(argv[1],"rb");
-		if(!gbF)
+		if(!gbEmuFileRead())
 		{
-			printf("Main: Could not open %s!\n", argv[1]);
+			gbEmuFileClose();
+			printf("Main: Could not read %s!\n", emuFileName);
 			puts("Press enter to exit");
 			getc(stdin);
 			return EXIT_SUCCESS;
 		}
-		fseek(gbF,0,SEEK_END);
-		size_t fsize = ftell(gbF);
-		rewind(gbF);
-		uint8_t *tmpROM = malloc(fsize);
-		fread(tmpROM,1,fsize,gbF);
-		fclose(gbF);
-		gbsTracksTotal = tmpROM[4];
-		gbsLoadAddr = (tmpROM[6])|(tmpROM[7]<<8);
-		gbsInitAddr = (tmpROM[8])|(tmpROM[9]<<8);
-		gbsPlayAddr = (tmpROM[0xA])|(tmpROM[0xB]<<8);
-		gbsSP = (tmpROM[0xC])|(tmpROM[0xD]<<8);
-		//should give more than enough room for everything
-		gbsRomSize = (fsize-0x70+gbsLoadAddr+0x7FFF)&(~0x7FFF);
-		//printf("Main: gbsLoadAddr %04x gbsInitAddr %04x gbsPlayAddr %04x gbsSP %04x\n",
-		//	gbsLoadAddr, gbsInitAddr, gbsPlayAddr, gbsSP);
-		emuGBROM = malloc(gbsRomSize);
-		memset(emuGBROM,0xFF,gbsRomSize);
-		memcpy(emuGBROM+gbsLoadAddr,tmpROM+0x70,fsize-0x70);
-		gbsTMA = tmpROM[0xE];
-		gbsTAC = tmpROM[0xF];
-		if(gbsTAC&0x80)
-		{
-			cpuSetSpeed(true);
-			gbCgbGame = gbCgbMode = true;
-		}
-		else
-		{
-			cpuSetSpeed(false);
-			gbCgbGame = gbCgbMode = false;
-		}
-		printf("Main: CGB Regs are %sallowed\n", gbCgbMode?"":"dis");
-		if(gbsTAC&4)
-		{
-			printf("Main: GBS Play Timing: Timer\n");
-			gbsTimerMode = true;
-		}
-		else
-		{
-			printf("Main: GBS Play Timing: VSync\n");
-			gbsTimerMode = false;
-		}
-		memInit(true,true);
-		if(tmpROM[0x10] != 0)
-		{
-			printf("Game: %.32s\n",(char*)(tmpROM+0x10));
-			sprintf(window_title, "%.32s (GBS) - %s\n", (char*)(tmpROM+0x10), VERSION_STRING);
-		}
-		free(tmpROM);
-		printf("Read in %s\n", argv[1]);
-		apuInitBufs();
-		//does all inits for us
-		memStartGBS();
-		gbEmuGBSPlayback = true;
-		linesToDraw = 20;
-		scaleFactor = 4;
-	}
-	else if(argc >= 2 && (strstr(argv[1],".gbc") != NULL || strstr(argv[1],".GBC") != NULL
-						|| strstr(argv[1],".gb") != NULL || strstr(argv[1],".GB") != NULL))
-	{
-		FILE *gbF = fopen(argv[1],"rb");
-		if(!gbF)
-		{
-			printf("Main: Could not open %s!\n", argv[1]);
-			puts("Press enter to exit");
-			getc(stdin);
-			return EXIT_SUCCESS;
-		}
-		fseek(gbF,0,SEEK_END);
-		size_t fsize = ftell(gbF);
-		rewind(gbF);
-		emuGBROM = malloc(fsize);
-		if(emuGBROM == NULL)
-		{
-			printf("Main: Unable to allocate ROM space...\n");
-			puts("Press enter to exit");
-			getc(stdin);
-			return EXIT_SUCCESS;
-		}
-		fread(emuGBROM,1,fsize,gbF);
-		fclose(gbF);
-		if(strstr(argv[1],".gbc") != NULL || strstr(argv[1],".GBC") != NULL)
-		{
-			emuSaveName = malloc(strlen(argv[1])+1);
-			memcpy(emuSaveName,argv[1],strlen(argv[1])+1);
-			memcpy(emuSaveName+strlen(argv[1])-3,"sav",3);
-		}
-		else if(strstr(argv[1],".gb") != NULL || strstr(argv[1],".GB") != NULL)
-		{
-			emuSaveName = malloc(strlen(argv[1])+2);
-			memcpy(emuSaveName,argv[1],strlen(argv[1])+1);
-			memcpy(emuSaveName+strlen(argv[1])-2,"sav",4);
-		}
+		gbEmuFileClose();
+		memcpy(emuSaveName, emuFileName, 1024);
+		if(emuFileType == FTYPE_GBC)
+			memcpy(emuSaveName+strlen(emuSaveName)-3,"sav",3);
+		else //.gb has one less character
+			memcpy(emuSaveName+strlen(emuSaveName)-2,"sav",3);
+		printf("Save Path: %s\n",emuSaveName); 
 		//Set Invalid VRAM allowed
-		gbAllowInvVRAM = (strstr(argv[1],"InvVRAM") != NULL);
+		gbAllowInvVRAM = (strstr(emuFileName,"InvVRAM") != NULL);
 		printf("Main: Invalid VRAM Access is %sallowed\n", gbAllowInvVRAM?"":"dis");
 		gbCgbBootrom = memInitCGBBootrom();
 		//Verify Header CRC
@@ -245,11 +185,76 @@ int main(int argc, char** argv)
 				sprintf(window_title, "%.16s (DMG) - %s\n", (char*)(emuGBROM+0x134), VERSION_STRING);
 			}
 		}
-		printf("Read in %s\n", argv[1]);
+	}
+	else if(emuFileType == FTYPE_GBS)
+	{
+		if(!gbEmuFileRead())
+		{
+			gbEmuFileClose();
+			printf("Main: Could not read %s!\n", emuFileName);
+			puts("Press enter to exit");
+			getc(stdin);
+			return EXIT_SUCCESS;
+		}
+		gbEmuFileClose();
+		uint8_t *tmpROM = emuGBROM;
+		uint32_t tmpROMsize = emuGBROMsize;
+		gbsTracksTotal = tmpROM[4];
+		gbsLoadAddr = (tmpROM[6])|(tmpROM[7]<<8);
+		gbsInitAddr = (tmpROM[8])|(tmpROM[9]<<8);
+		gbsPlayAddr = (tmpROM[0xA])|(tmpROM[0xB]<<8);
+		gbsSP = (tmpROM[0xC])|(tmpROM[0xD]<<8);
+		//should give more than enough room for everything
+		gbsRomSize = emuGBROMsize = (tmpROMsize-0x70+gbsLoadAddr+0x7FFF)&(~0x7FFF);
+		//printf("Main: gbsLoadAddr %04x gbsInitAddr %04x gbsPlayAddr %04x gbsSP %04x\n",
+		//	gbsLoadAddr, gbsInitAddr, gbsPlayAddr, gbsSP);
+		emuGBROM = malloc(emuGBROMsize);
+		memset(emuGBROM,0xFF,emuGBROMsize);
+		memcpy(emuGBROM+gbsLoadAddr,tmpROM+0x70,tmpROMsize-0x70);
+		gbsTMA = tmpROM[0xE];
+		gbsTAC = tmpROM[0xF];
+		if(gbsTAC&0x80)
+		{
+			cpuSetSpeed(true);
+			gbCgbGame = gbCgbMode = true;
+		}
+		else
+		{
+			cpuSetSpeed(false);
+			gbCgbGame = gbCgbMode = false;
+		}
+		printf("Main: CGB Regs are %sallowed\n", gbCgbMode?"":"dis");
+		if(gbsTAC&4)
+		{
+			printf("Main: GBS Play Timing: Timer\n");
+			gbsTimerMode = true;
+		}
+		else
+		{
+			printf("Main: GBS Play Timing: VSync\n");
+			gbsTimerMode = false;
+		}
+		memInit(true,true);
+		if(tmpROM[0x10] != 0)
+		{
+			printf("Game: %.32s\n",(char*)(tmpROM+0x10));
+			sprintf(window_title, "%.32s (GBS) - %s\n", (char*)(tmpROM+0x10), VERSION_STRING);
+		}
+		free(tmpROM);
+		apuInitBufs();
+		//does all inits for us
+		memStartGBS();
+		gbEmuGBSPlayback = true;
+		linesToDraw = 20;
+		scaleFactor = 4;
 	}
 	if(emuGBROM == NULL)
 	{
+#if ZIPSUPPORT
+		printf("Main: No File to Open! Make sure to call fixGB with a .gb/.gbc/.gbs/.zip File as Argument.\n");
+#else
 		printf("Main: No File to Open! Make sure to call fixGB with a .gb/.gbc/.gbs File as Argument.\n");
+#endif
 		puts("Press enter to exit");
 		getc(stdin);
 		return EXIT_SUCCESS;
@@ -297,6 +302,176 @@ int main(int argc, char** argv)
 	return EXIT_SUCCESS;
 }
 
+static FILE *gbEmuFilePointer = NULL;
+#if ZIPSUPPORT
+static bool gbEmuFileIsZip = false;
+static uint8_t *gbEmuZipBuf = NULL;
+static uint32_t gbEmuZipLen = 0;
+static unzFile gbEmuZipObj;
+static unz_file_info gbEmuZipObjInfo;
+#endif
+static int gbEmuGetFileType(char *name)
+{
+	int nLen = strlen(name);
+	if(nLen > 4 && name[nLen-4] == '.')
+	{
+		if(tolower(name[nLen-3]) == 'g' && tolower(name[nLen-2]) == 'b' && tolower(name[nLen-1]) == 'c')
+			return FTYPE_GBC;
+		else if(tolower(name[nLen-3]) == 'g' && tolower(name[nLen-2]) == 'b' && tolower(name[nLen-1]) == 's')
+			return FTYPE_GBS;
+#if ZIPSUPPORT
+		else if(tolower(name[nLen-3]) == 'z' && tolower(name[nLen-2]) == 'i' && tolower(name[nLen-1]) == 'p')
+			return FTYPE_ZIP;
+#endif
+	}
+	else if(nLen > 3 && name[nLen-3] == '.')
+	{
+		if(tolower(name[nLen-2]) == 'g' && tolower(name[nLen-1]) == 'b')
+			return FTYPE_GB;
+	}
+	return FTYPE_UNK;
+}
+
+static void gbEmuFileOpen(char *name)
+{
+	emuFileType = FTYPE_UNK;
+	memset(emuFileName,0,1024);
+	memset(emuSaveName,0,1024);
+	int baseType = gbEmuGetFileType(name);
+#if ZIPSUPPORT
+	if(baseType == FTYPE_ZIP)
+	{
+		printf("Base ZIP File: %s\n", name);
+		FILE *tmp = fopen(name,"rb");
+		if(!tmp)
+		{
+			printf("Main: Could not open %s!\n", name);
+			return;
+		}
+		fseek(tmp,0,SEEK_END);
+		gbEmuZipLen = ftell(tmp);
+		rewind(tmp);
+		gbEmuZipBuf = malloc(gbEmuZipLen);
+		if(!gbEmuZipBuf)
+		{
+			printf("Main: Could not allocate ZIP buffer!\n");
+			fclose(tmp);
+			return;
+		}
+		fread(gbEmuZipBuf,1,gbEmuZipLen,tmp);
+		fclose(tmp);
+		char filepath[20];
+		snprintf(filepath,20,"%x+%x",(unsigned int)gbEmuZipBuf,gbEmuZipLen);
+		gbEmuZipObj = unzOpen(filepath);
+		int err = unzGoToFirstFile(gbEmuZipObj);
+		while (err == UNZ_OK)
+		{
+			char tmpName[256];
+			err = unzGetCurrentFileInfo(gbEmuZipObj,&gbEmuZipObjInfo,tmpName,256,NULL,0,NULL,0);
+			if(err == UNZ_OK)
+			{
+				int curInZipType = gbEmuGetFileType(tmpName);
+				if(curInZipType != FTYPE_ZIP && curInZipType != FTYPE_UNK)
+				{
+					emuFileType = curInZipType;
+					gbEmuFileIsZip = true;
+					if(strchr(name,'/') != NULL || strchr(name,'\\') != NULL)
+					{
+						char *nPath = name;
+						if(strchr(nPath,'/') != NULL)
+							nPath = (strrchr(nPath,'/')+1);
+						if(strchr(nPath,'\\') != NULL)
+							nPath = (strrchr(nPath,'\\')+1);
+						strncpy(emuFileName, name, nPath-name);
+					}
+					char *zName = tmpName;
+					if(strchr(zName,'/') != NULL)
+						zName = (strrchr(zName,'/')+1);
+					if(strchr(zName,'\\') != NULL)
+						zName = (strrchr(zName,'\\')+1);
+					strcat(emuFileName, zName);
+					printf("File in ZIP Type: %s\n", emuFileType == FTYPE_GB ? "GB" : (emuFileType == FTYPE_GBC ? "GBC" : "GBS"));
+					printf("Full Path from ZIP: %s\n", emuFileName);
+					break;
+				}
+				else
+					err = unzGoToNextFile(gbEmuZipObj);
+			}
+		}
+		if(emuFileType == FTYPE_UNK)
+		{
+			printf("Found no usable file in ZIP\n");
+			unzClose(gbEmuZipObj);
+			if(gbEmuZipBuf)
+				free(gbEmuZipBuf);
+			gbEmuZipBuf = NULL;
+			gbEmuZipLen = 0;
+		}
+	}
+	else if(baseType != FTYPE_UNK)
+#else
+	if(baseType != FTYPE_UNK)
+#endif
+	{
+		gbEmuFilePointer = fopen(name,"rb");
+		if(!gbEmuFilePointer)
+			printf("Main: Could not open %s!\n", name);
+		else
+		{
+			emuFileType = baseType;
+			strncpy(emuFileName, name, 1024);
+			printf("File Type: %s\n", baseType == FTYPE_GB ? "GB" : (baseType == FTYPE_GBC ? "GBC" : "GBS"));
+			printf("Full Path: %s\n", emuFileName);
+		}
+	}
+}
+
+static bool gbEmuFileRead()
+{
+#if ZIPSUPPORT
+	if(gbEmuFileIsZip)
+	{
+		unzOpenCurrentFile(gbEmuZipObj);
+		emuGBROMsize = gbEmuZipObjInfo.uncompressed_size;
+		emuGBROM = malloc(emuGBROMsize);
+		if(emuGBROM)
+			unzReadCurrentFile(gbEmuZipObj,emuGBROM,emuGBROMsize);
+		unzCloseCurrentFile(gbEmuZipObj);
+	}
+	else
+#endif
+	{
+		fseek(gbEmuFilePointer,0,SEEK_END);
+		emuGBROMsize = ftell(gbEmuFilePointer);
+		rewind(gbEmuFilePointer);
+		emuGBROM = malloc(emuGBROMsize);
+		if(emuGBROM)
+			fread(emuGBROM,1,emuGBROMsize,gbEmuFilePointer);
+	}
+	if(emuGBROM)
+		return true;
+	//else
+	printf("Main: Could not allocate ROM buffer!\n");
+	return false;
+}
+
+//cleans up vars from read
+static void gbEmuFileClose()
+{
+#if ZIPSUPPORT
+	if(gbEmuFileIsZip)
+		unzClose(gbEmuZipObj);
+	gbEmuFileIsZip = false;
+	if(gbEmuZipBuf)
+		free(gbEmuZipBuf);
+	gbEmuZipBuf = NULL;
+	gbEmuZipLen = 0;
+#endif
+	if(gbEmuFilePointer)
+		fclose(gbEmuFilePointer);
+	gbEmuFilePointer = NULL;
+}
+
 static volatile bool emuRenderFrame = false;
 
 static void gbEmuDeinit(void)
@@ -309,9 +484,6 @@ static void gbEmuDeinit(void)
 		free(emuGBROM);
 	emuGBROM = NULL;
 	memSaveGame();
-	if(emuSaveName != NULL)
-		free(emuSaveName);
-	emuSaveName = NULL;
 	//printf("Bye!\n");
 }
 
