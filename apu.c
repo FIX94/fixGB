@@ -638,8 +638,15 @@ void apuSetReg8(uint16_t addr, uint8_t val)
 			break;
 		case 0x12:
 			p1Env.vol = (val>>4)&0xF;
-			p1Env.curVol = p1Env.vol;
 			p1Env.modeadd = (val&8)!=0;
+			if(p1Env.modeadd && p1Env.period == 0 && (val&7) == 0)
+			{
+				//"Zombie" Mode
+				p1Env.curVol++;
+				p1Env.curVol &= 0xF;
+			}
+			else //Normal behaviour
+				p1Env.curVol = p1Env.vol;
 			p1dacenable = (p1Env.modeadd || p1Env.vol);
 			if(!p1dacenable)
 				p1enable = false;
@@ -705,8 +712,15 @@ void apuSetReg8(uint16_t addr, uint8_t val)
 			break;
 		case 0x17:
 			p2Env.vol = (val>>4)&0xF;
-			p2Env.curVol = p2Env.vol;
 			p2Env.modeadd = (val&8)!=0;
+			if(p2Env.modeadd && p2Env.period == 0 && (val&7) == 0)
+			{
+				//"Zombie" Mode
+				p2Env.curVol++;
+				p2Env.curVol &= 0xF;
+			}
+			else //Normal behaviour
+				p2Env.curVol = p2Env.vol;
 			p2dacenable = (p2Env.modeadd || p2Env.vol);
 			if(!p2dacenable)
 				p2enable = false;
@@ -822,8 +836,15 @@ void apuSetReg8(uint16_t addr, uint8_t val)
 			break;
 		case 0x21:
 			noiseEnv.vol = (val>>4)&0xF;
-			noiseEnv.curVol = noiseEnv.vol;
 			noiseEnv.modeadd = (val&8)!=0;
+			if(noiseEnv.modeadd && noiseEnv.period == 0 && (val&7) == 0)
+			{
+				//"Zombie" Mode
+				noiseEnv.curVol++;
+				noiseEnv.curVol &= 0xF;
+			}
+			else //Normal behaviour
+				noiseEnv.curVol = noiseEnv.vol;
 			noisedacenable = (noiseEnv.modeadd || noiseEnv.vol);
 			if(!noisedacenable)
 				noiseenable = false;

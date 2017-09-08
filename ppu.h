@@ -20,6 +20,7 @@ void ppuSetVRAMBank8(uint16_t addr, uint8_t val);
 void ppuSetVRAMNoBank8(uint16_t addr, uint8_t val);
 void ppuSetOAM8(uint16_t addr, uint8_t val);
 void ppuSetReg8(uint16_t addr, uint8_t val);
+void ppuSetOAMDMAVal(uint8_t pos, uint8_t val);
 bool ppuInVBlank();
 bool ppuInHBlank();
 void ppuDumpMem();

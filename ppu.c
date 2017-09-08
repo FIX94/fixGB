@@ -186,6 +186,43 @@ void ppuInitDrawPointer()
 		ppuDrawDot = ppuDrawDotDMG;
 }
 
+static bool ppuHadIRQs = false;
+void ppuCheckIRQs()
+{
+	bool ppuHasIRQs = false;
+	if(ppuLineMatch && (PPU_Reg[1]&PPU_LINEMATCH_IRQ))
+	{
+		//printf("Line STAT IRQ line %i clock %i\n", ppuLines, ppuClock);
+		ppuHasIRQs = true;
+	}
+	else if(ppuMode == 0 && (PPU_Reg[1]&PPU_HBLANK_IRQ))
+	{
+		//printf("HBlank STAT IRQ line %i clock %i\n", ppuLines, ppuClock);
+		ppuHasIRQs = true;
+	}
+	else if((ppuMode == 1) && PPU_Reg[1]&PPU_VBLANK_IRQ)
+	{
+		//printf("VBlank STAT IRQ line %i clock %i\n", ppuLines, ppuClock);
+		ppuHasIRQs = true;
+	}
+	else if((ppuMode == 1 || ppuMode == 2) && (PPU_Reg[1]&PPU_OAM_IRQ))
+	{
+		//printf("OAM STAT IRQ line %i clock %i\n", ppuLines, ppuClock);
+		ppuHasIRQs = true;
+	}
+	if(ppuHasIRQs)
+	{
+		if(ppuHadIRQs == false)
+		{
+			//printf("Setting CPU IRQ\n");
+			memEnableStatIrq();
+		}
+		ppuHadIRQs = true;
+	}
+	else
+		ppuHadIRQs = false;
+}
+
 extern bool gbEmuGBSPlayback;
 void ppuCycle()
 {
@@ -198,15 +235,8 @@ void ppuCycle()
 	//check for line IRQ on first clock
 	if(ppuClock == 0)
 	{
-		//DONT check line 0 here, already done further below
-		if((ppuLines > 0) && ppuLineMatch)
-		{
-			if(PPU_Reg[1]&PPU_LINEMATCH_IRQ)
-			{
-				//printf("Line STAT IRQ at %i\n",ppuLines);
-				memEnableStatIrq();
-			}
-		}
+		if(ppuLines > 0) //DONT check line 0 here, already done further below
+			ppuCheckIRQs();
 	}
 	if(ppuLines < 144)
 	{
@@ -219,11 +249,7 @@ void ppuCycle()
 				ppuOAM2pos = 0; //Reset array pos
 				ppuMode = 2; //OAM
 				ppuHBlank = false;
-				if(PPU_Reg[1]&PPU_OAM_IRQ)
-				{
-					//printf("OAM STAT IRQ\n");
-					memEnableStatIrq();
-				}
+				ppuCheckIRQs();
 			}
 			if(((ppuClock&1) == 0) && ppuOAM2pos < 10)
 			{
@@ -259,11 +285,7 @@ void ppuCycle()
 		{
 			ppuMode = 0; //HBlank
 			ppuHBlank = true;
-			if(PPU_Reg[1]&PPU_HBLANK_IRQ)
-			{
-				//printf("HBlank STAT IRQ\n");
-				memEnableStatIrq();
-			}
+			ppuCheckIRQs();
 		}
 	} //VERY important, reg 4 to the outside gets set back to 0 early!
 	else if(ppuLines == 153 && ppuClock == 4)
@@ -271,14 +293,7 @@ void ppuCycle()
 		PPU_Reg[4] = 0;
 		//check for linematch and IRQ early too
 		ppuLineMatch = ((PPU_Reg[4] == PPU_Reg[5]) ? PPU_LINEMATCH : 0);
-		if(ppuLineMatch)
-		{
-			if(PPU_Reg[1]&PPU_LINEMATCH_IRQ)
-			{
-				//printf("Line STAT IRQ at %i\n",PPU_Reg[4]);
-				memEnableStatIrq();
-			}
-		}
+		ppuCheckIRQs();
 	}
 ppuIncreasePos:
 	/* increase pos */
@@ -294,16 +309,7 @@ ppuIncreasePos:
 			ppuHBlank = false;
 			ppuVBlank = true;
 			memEnableVBlankIrq();
-			if(PPU_Reg[1]&PPU_VBLANK_IRQ)
-			{
-				//printf("VBlank STAT IRQ\n");
-				memEnableStatIrq();
-			}
-			if(PPU_Reg[1]&PPU_OAM_IRQ)
-			{
-				//printf("OAM STAT IRQ\n");
-				memEnableStatIrq();
-			}
+			ppuCheckIRQs();
 			//printf("VBlank Start\n");
 		}
 		else if(ppuLines == 154)
@@ -342,9 +348,10 @@ uint8_t ppuGetVRAMNoBank8(uint16_t addr)
 	return 0xFF;
 }
 
+extern bool cpu_oam_dma_running;
 uint8_t ppuGetOAM8(uint16_t addr)
 {
-	if(gbAllowInvVRAM || !(PPU_Reg[0] & PPU_ENABLE) || (ppuMode == 0) || (ppuMode == 1))
+	if(gbAllowInvVRAM || ((!(PPU_Reg[0] & PPU_ENABLE) || (ppuMode == 0) || (ppuMode == 1)) && !cpu_oam_dma_running))
 		return PPU_OAM[addr&0xFF];
 	return 0xFF;
 }
@@ -394,22 +401,34 @@ void ppuSetVRAMNoBank8(uint16_t addr, uint8_t val)
 
 void ppuSetOAM8(uint16_t addr, uint8_t val)
 {
-	if(gbAllowInvVRAM || !(PPU_Reg[0] & PPU_ENABLE) || (ppuMode == 0) || (ppuMode == 1))
+	if(gbAllowInvVRAM || ((!(PPU_Reg[0] & PPU_ENABLE) || (ppuMode == 0) || (ppuMode == 1)) && !cpu_oam_dma_running))
 		PPU_OAM[addr&0xFF] = val;
 }
 
+extern bool cpu_oam_dma;
+extern uint16_t cpu_oam_dma_addr;
+
 void ppuSetReg8(uint16_t addr, uint8_t val)
 {
+	bool prevEnable;
 	uint8_t reg = addr&0x3F;
+	//printf("line %i clock %i reg %02x val %02x\n", ppuLines, ppuClock, reg, val);
 	switch(reg)
 	{
-		/*case 0x0: case 0x1:*/ case 0x2: case 0x3: /*case 0x4:*/ case 0x5:
+		/*case 0x0: case 0x1:*/ case 0x2: case 0x3: /*case 0x4: case 0x5:*/
 		/*case 0x6:*/ case 0x7: case 0x8: case 0x9: case 0xA: case 0xB:
 			PPU_Reg[reg] = val;
 			break;
 		case 0x0: //Control reg
+			prevEnable = (PPU_Reg[0]&PPU_ENABLE);
 			PPU_Reg[0] = val;
-			if(!(val&PPU_ENABLE))
+			if(prevEnable && !(val&PPU_ENABLE))
+			{
+				PPU_Reg[4] = 0;
+				ppuMode = 0;
+				ppuHadIRQs = false;
+			}
+			else if((val&PPU_ENABLE) && !prevEnable)
 			{
 				ppuLines = 0;
 				PPU_Reg[4] = 0;
@@ -420,19 +439,37 @@ void ppuSetReg8(uint16_t addr, uint8_t val)
 				ppuOAM2pos = 0; //Reset array pos
 				ppuMode = 2; //OAM
 				ppuHBlank = false;
+				//re-check IRQs right on enable
+				ppuLineMatch = ((PPU_Reg[4] == PPU_Reg[5]) ? PPU_LINEMATCH : 0);
+				ppuCheckIRQs();
 			}
 			break;
 		case 0x1: //STAT RO Regs
+			if(!gbCgbMode)
+			{
+				//printf("DMG Write STAT at line %i clock %i, %d %d %d\n", ppuLines, ppuClock, (ppuMode == 0 && !(PPU_Reg[1]&PPU_HBLANK_IRQ)),
+				//	(ppuMode == 1 && !(PPU_Reg[1]&PPU_VBLANK_IRQ)), !(ppuLineMatch && (PPU_Reg[1]&PPU_LINEMATCH_IRQ)));
+				//DMG STAT IRQ on HBlank/VBlank when no other IRQs previously enabled
+				if((ppuMode == 0 || ppuMode == 1) && !ppuHadIRQs)
+				{
+					//printf("DMG Write STAT IRQ line %i clock %i\n", ppuLines, ppuClock);
+					memEnableStatIrq();
+				}
+			}
 			PPU_Reg[1] = (val&(~7));
+			if(PPU_Reg[0]&PPU_ENABLE)
+				ppuCheckIRQs();
+			break;
+		case 0x5: //LYC
+			PPU_Reg[5] = val;
+			ppuLineMatch = ((PPU_Reg[4] == PPU_Reg[5]) ? PPU_LINEMATCH : 0);
+			if(PPU_Reg[0]&PPU_ENABLE)
+				ppuCheckIRQs();
 			break;
 		case 0x6: //OAM DMA
 			PPU_Reg[6] = val;
-			if(val < 0xFE)
-			{
-				uint8_t i;
-				for(i = 0; i < 0xA0; i++)
-					PPU_OAM[i] = memGet8((val<<8) | i);
-			}
+			cpu_oam_dma = true;
+			cpu_oam_dma_addr = (val<<8);
 			break;
 		case 0x28: //FF68
 			ppuCgbBgPalPos = val;
@@ -1071,4 +1108,9 @@ void ppuDrawGBSTrackNum(uint8_t cTrack, uint8_t trackTotal)
 	}
 	ppuDrawRest(curX, trackTotal%10);
 	curX+=10;
+}
+
+void ppuSetOAMDMAVal(uint8_t pos, uint8_t val)
+{
+	PPU_OAM[pos] = val;
 }

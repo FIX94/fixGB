@@ -29,13 +29,14 @@ static uint8_t irqEnableReg;
 static uint8_t irqFlagsReg;
 //writable, undocumented regs
 static uint8_t genericReg[4];
-static uint8_t divRegVal;
-static uint8_t divRegClock;
+static uint16_t divRegVal;
 static uint8_t timerReg;
 static uint8_t timerRegVal;
 static uint8_t timerResetVal;
-static uint8_t timerRegClock;
-static uint8_t timerRegTimer;
+static uint16_t timerRegBit;
+static uint8_t sioTimerRegClock;
+static uint8_t sioTimerRegTimer;
+static uint8_t sioBitsTransfered;
 static uint8_t cgbMainBank;
 static bool cgbDmaActive;
 static uint16_t cgbDmaSrc;
@@ -45,6 +46,7 @@ static uint8_t memDmaClock;
 static bool cgbDmaHBlankMode;
 static bool cgbBootromEnabled = false;
 static bool timerRegEnable = false;
+static bool sioTimerRegEnable = false;
 static bool emuSaveEnabled = false;
 
 //from main.c
@@ -415,12 +417,13 @@ bool memInit(bool romcheck, bool gbs)
 	irqEnableReg = 0;
 	irqFlagsReg = 0;
 	divRegVal = 0;
-	divRegClock = 1;
 	timerReg = 0;
 	timerRegVal = 0;
 	timerResetVal = 0;
-	timerRegClock = 1;
-	timerRegTimer = 64; //262144 / 64 = 4096
+	timerRegBit = (1<<9); //Freq 0
+	sioTimerRegClock = 1;
+	sioTimerRegTimer = 32;
+	sioBitsTransfered = 0;
 	cgbMainBank = 1;
 	cgbDmaActive = false;
 	cgbDmaSrc = 0;
@@ -429,6 +432,7 @@ bool memInit(bool romcheck, bool gbs)
 	memDmaClock = 1;
 	cgbDmaHBlankMode = false;
 	timerRegEnable = false;
+	sioTimerRegEnable = false;
 	memInitGetSetPointers();
 	return true;
 }
@@ -589,11 +593,13 @@ void memClearCurIrqList(uint8_t num)
 
 void memEnableVBlankIrq()
 {
+	//printf("VBlank IRQ\n");
 	irqFlagsReg |= 1;
 }
 
 void memEnableStatIrq()
 {
+	//printf("STAT IRQ\n");
 	irqFlagsReg |= 2;
 }
 
@@ -642,9 +648,9 @@ static uint8_t memGetGeneralReg8(uint16_t addr)
 		case 0x01:
 			return serialReg;
 		case 0x02:
-			return serialCtrlReg|0x7E;
+			return serialCtrlReg | (gbCgbMode ? 0x7C : 0x7E);
 		case 0x04:
-			return divRegVal;
+			return (divRegVal>>8);
 		case 0x05:
 			return timerRegVal;
 		case 0x06:
@@ -729,8 +735,14 @@ static void memSetGeneralReg8(uint16_t addr, uint8_t val)
 	{
 		case 0x01:
 			serialReg = val;
+			break;
 		case 0x02:
-			serialCtrlReg = val;
+			serialCtrlReg = val&(gbCgbMode ? 0x83 : 0x81);
+			sioTimerRegTimer = (serialCtrlReg&2) ? 1 : 32;
+			sioTimerRegEnable = (serialCtrlReg&0x81) == 0x81;
+			sioBitsTransfered = 0;
+			sioTimerRegClock = 1;
+			break;
 		case 0x04:
 			divRegVal = 0; //writing any val resets to 0
 			break;
@@ -746,13 +758,13 @@ static void memSetGeneralReg8(uint16_t addr, uint8_t val)
 			timerReg = val; //for readback
 			timerRegEnable = ((val&4)!=0);
 			if((val&3)==0) //0 for 4096 Hz
-				timerRegTimer = 64; //262144 / 64 = 4096
+				timerRegBit = (1<<9);
 			else if((val&3)==1) //1 for 262144 Hz
-				timerRegTimer = 1; //262144 / 1 = 262144
+				timerRegBit = (1<<3);
 			else if((val&3)==2) //2 for 65536 Hz
-				timerRegTimer = 4; //262144 / 4 = 65536
+				timerRegBit = (1<<5);
 			else if((val&3)==3) //3 for 16384 Hz
-				timerRegTimer = 16; //262144 / 16 = 16384
+				timerRegBit = (1<<7);
 			break;
 		case 0x0F:
 			irqFlagsReg = val&0x1F;
@@ -794,6 +806,7 @@ static void memSetGeneralReg8(uint16_t addr, uint8_t val)
 			break;
 		case 0x56:
 			irReq = val;
+			break;
 		case 0x70:
 			if(gbCgbMode)
 			{
@@ -895,7 +908,7 @@ void memSaveGame()
 extern bool gbEmuGBSPlayback;
 extern bool gbsTimerMode;
 extern uint8_t inValReads[8];
-
+static bool timerPrevTicked = false;
 //clocked at 262144 Hz (or 2x that in CGB Mode)
 void memClockTimers()
 {
@@ -928,20 +941,39 @@ void memClockTimers()
 			gbs_prevValReads[BUTTON_LEFT] = 0;
 	}
 
-	//clocked at 16384 Hz (262144 / 16 = 16384)
-	if(divRegClock == 16)
+	if(sioTimerRegEnable)
 	{
-		divRegVal++;
-		divRegClock = 1;
+		//clocked at specified rate
+		if(sioTimerRegClock == sioTimerRegTimer)
+		{
+			sioTimerRegClock = 1;
+			serialReg <<= 1;
+			serialReg |= 1; //no serial cable=bit set
+			sioBitsTransfered++;
+			if(sioBitsTransfered == 8)
+			{
+				//printf("SIO interrupt\n");
+				sioBitsTransfered = 0;
+				irqFlagsReg |= 8;
+				sioTimerRegEnable = false;
+				serialCtrlReg &= 3;
+			}
+		}
+		else
+			sioTimerRegClock++;
 	}
-	else
-		divRegClock++;
+}
 
-	if(!timerRegEnable)
-		return;
-
+extern bool cpuDmaHalt;
+extern uint8_t cpuAddSpeed;
+//clocked at 131072 Hz
+void memDmaClockTimers()
+{
+	divRegVal += cpuAddSpeed;
 	//clocked at specified rate
-	if(timerRegClock == timerRegTimer)
+	if((timerRegBit&divRegVal) && timerRegEnable)
+			timerPrevTicked = true;
+	else if(timerPrevTicked)
 	{
 		timerRegVal++;
 		if(timerRegVal == 0) //set on overflow
@@ -953,17 +985,9 @@ void memClockTimers()
 			else if(gbsTimerMode)
 				cpuPlayGBS();
 		}
-		timerRegClock = 1;
+		timerPrevTicked = false;
 	}
-	else
-		timerRegClock++;
-}
 
-extern bool cpuDmaHalt;
-
-//clocked at 131072 Hz
-void memDmaClockTimers()
-{
 	if(memDmaClock >= 16)
 	{
 		cpuDmaHalt = false;

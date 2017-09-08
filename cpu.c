@@ -32,7 +32,11 @@ extern bool gbCgbBootrom;
 //used externally
 bool cpuDoStopSwitch = false;
 bool cpuCgbSpeed = false;
+uint8_t cpuAddSpeed = 1;
 void cpuSetupActionArr();
+bool cpu_oam_dma = false;
+bool cpu_oam_dma_running = false;
+uint16_t cpu_oam_dma_addr = 0;
 
 static uint16_t sp, pc, cpuTmp16;
 static uint8_t a,b,c,d,e,f,h,l,cpuTmp;
@@ -68,6 +72,9 @@ void cpuInit()
 	cpuHaltBug = false;
 	cpuCgbSpeed = false;
 	cpuPrevInAny = false;
+	cpu_oam_dma = false;
+	cpu_oam_dma_running = false;
+	cpu_oam_dma_addr = 0;
 	cpuSetupActionArr();
 	//gbs stuff
 	gbsInitRet = false; //for first init
@@ -634,7 +641,6 @@ enum {
 	CPU_GET_INSTRUCTION = 0,
 	CPU_GET_SUBINSTRUCTION,
 	CPU_DELAY_CYCLE,
-	CPU_DELAY_RETI_CYCLE,
 	CPU_ACTION_GET_INSTRUCTION,
 	CPU_A_ACTION_GET_INSTRUCTION,
 	CPU_B_ACTION_GET_INSTRUCTION,
@@ -726,6 +732,7 @@ enum {
 	CPU_TMP16_WRITE8_SPH,
 	CPU_DI_GET_INSTRUCTION,
 	CPU_EI_GET_INSTRUCTION,
+	CPU_GET_INSTRUCTION_EI,
 	CPU_SCF_GET_INSTRUCTION,
 	CPU_CCF_GET_INSTRUCTION,
 	CPU_PC_FROM_HL_GET_INSTRUCTION,
@@ -766,17 +773,17 @@ static uint8_t cpu_absjmpz_arr[4] = { CPU_TMP_READ8_PC_INC, CPU_T16L_FROM_TMP_T1
 static uint8_t cpu_absjmpc_arr[4] = { CPU_TMP_READ8_PC_INC, CPU_T16L_FROM_TMP_T16H_READ8_PC_INC_JPC_CHK, CPU_PC_FROM_T16, CPU_GET_INSTRUCTION };
 
 static uint8_t cpu_abscall_arr[6] = { CPU_TMP_READ8_PC_INC, CPU_T16L_FROM_TMP_T16H_READ8_PC_INC, CPU_DELAY_CYCLE, CPU_SP_WRITE8_PCH_DEC, CPU_SP_WRITE8_PCL_DEC_PC_FROM_T16, CPU_GET_INSTRUCTION };
-static uint8_t cpu_abscallnz_arr[6] = { CPU_TMP_READ8_PC_INC, CPU_T16L_FROM_TMP_T16H_READ8_PC_INC_CNZ_CHK, CPU_SP_WRITE8_PCH_DEC, CPU_SP_WRITE8_PCL_DEC_PC_FROM_T16, CPU_PC_FROM_T16, CPU_GET_INSTRUCTION };
-static uint8_t cpu_abscallnc_arr[6] = { CPU_TMP_READ8_PC_INC, CPU_T16L_FROM_TMP_T16H_READ8_PC_INC_CNC_CHK, CPU_SP_WRITE8_PCH_DEC, CPU_SP_WRITE8_PCL_DEC_PC_FROM_T16, CPU_PC_FROM_T16, CPU_GET_INSTRUCTION };
-static uint8_t cpu_abscallz_arr[6] = { CPU_TMP_READ8_PC_INC, CPU_T16L_FROM_TMP_T16H_READ8_PC_INC_CZ_CHK, CPU_SP_WRITE8_PCH_DEC, CPU_SP_WRITE8_PCL_DEC_PC_FROM_T16, CPU_PC_FROM_T16, CPU_GET_INSTRUCTION };
-static uint8_t cpu_abscallc_arr[6] = { CPU_TMP_READ8_PC_INC, CPU_T16L_FROM_TMP_T16H_READ8_PC_INC_CC_CHK, CPU_SP_WRITE8_PCH_DEC, CPU_SP_WRITE8_PCL_DEC_PC_FROM_T16, CPU_PC_FROM_T16, CPU_GET_INSTRUCTION };
+static uint8_t cpu_abscallnz_arr[6] = { CPU_TMP_READ8_PC_INC, CPU_T16L_FROM_TMP_T16H_READ8_PC_INC_CNZ_CHK, CPU_DELAY_CYCLE, CPU_SP_WRITE8_PCH_DEC, CPU_SP_WRITE8_PCL_DEC_PC_FROM_T16, CPU_GET_INSTRUCTION };
+static uint8_t cpu_abscallnc_arr[6] = { CPU_TMP_READ8_PC_INC, CPU_T16L_FROM_TMP_T16H_READ8_PC_INC_CNC_CHK, CPU_DELAY_CYCLE, CPU_SP_WRITE8_PCH_DEC, CPU_SP_WRITE8_PCL_DEC_PC_FROM_T16, CPU_GET_INSTRUCTION };
+static uint8_t cpu_abscallz_arr[6] = { CPU_TMP_READ8_PC_INC, CPU_T16L_FROM_TMP_T16H_READ8_PC_INC_CZ_CHK, CPU_DELAY_CYCLE, CPU_SP_WRITE8_PCH_DEC, CPU_SP_WRITE8_PCL_DEC_PC_FROM_T16, CPU_GET_INSTRUCTION };
+static uint8_t cpu_abscallc_arr[6] = { CPU_TMP_READ8_PC_INC, CPU_T16L_FROM_TMP_T16H_READ8_PC_INC_CC_CHK, CPU_DELAY_CYCLE, CPU_SP_WRITE8_PCH_DEC, CPU_SP_WRITE8_PCL_DEC_PC_FROM_T16, CPU_GET_INSTRUCTION };
 
-static uint8_t cpu_ret_arr[4] = { CPU_DELAY_CYCLE, CPU_TMP_READ8_SP_INC, CPU_PCL_FROM_TMP_PCH_READ8_SP_INC, CPU_GET_INSTRUCTION };
-static uint8_t cpu_reti_arr[4] = { CPU_DELAY_RETI_CYCLE, CPU_TMP_READ8_SP_INC, CPU_PCL_FROM_TMP_PCH_READ8_SP_INC, CPU_EI_GET_INSTRUCTION };
-static uint8_t cpu_retnz_arr[5] = { CPU_RET_NZ_CHK, CPU_DELAY_CYCLE, CPU_TMP_READ8_SP_INC, CPU_PCL_FROM_TMP_PCH_READ8_SP_INC, CPU_GET_INSTRUCTION };
-static uint8_t cpu_retnc_arr[5] = { CPU_RET_NC_CHK, CPU_DELAY_CYCLE, CPU_TMP_READ8_SP_INC, CPU_PCL_FROM_TMP_PCH_READ8_SP_INC, CPU_GET_INSTRUCTION };
-static uint8_t cpu_retz_arr[5] = { CPU_RET_Z_CHK, CPU_DELAY_CYCLE, CPU_TMP_READ8_SP_INC, CPU_PCL_FROM_TMP_PCH_READ8_SP_INC, CPU_GET_INSTRUCTION };
-static uint8_t cpu_retc_arr[5] = { CPU_RET_C_CHK, CPU_DELAY_CYCLE, CPU_TMP_READ8_SP_INC, CPU_PCL_FROM_TMP_PCH_READ8_SP_INC, CPU_GET_INSTRUCTION };
+static uint8_t cpu_ret_arr[4] = { CPU_TMP_READ8_SP_INC, CPU_PCL_FROM_TMP_PCH_READ8_SP_INC, CPU_DELAY_CYCLE, CPU_GET_INSTRUCTION };
+static uint8_t cpu_reti_arr[4] = { CPU_TMP_READ8_SP_INC, CPU_PCL_FROM_TMP_PCH_READ8_SP_INC, CPU_DELAY_CYCLE, CPU_EI_GET_INSTRUCTION };
+static uint8_t cpu_retnz_arr[5] = { CPU_RET_NZ_CHK, CPU_TMP_READ8_SP_INC, CPU_PCL_FROM_TMP_PCH_READ8_SP_INC, CPU_DELAY_CYCLE, CPU_GET_INSTRUCTION };
+static uint8_t cpu_retnc_arr[5] = { CPU_RET_NC_CHK, CPU_TMP_READ8_SP_INC, CPU_PCL_FROM_TMP_PCH_READ8_SP_INC, CPU_DELAY_CYCLE, CPU_GET_INSTRUCTION };
+static uint8_t cpu_retz_arr[5] = { CPU_RET_Z_CHK, CPU_TMP_READ8_SP_INC, CPU_PCL_FROM_TMP_PCH_READ8_SP_INC, CPU_DELAY_CYCLE, CPU_GET_INSTRUCTION };
+static uint8_t cpu_retc_arr[5] = { CPU_RET_C_CHK, CPU_TMP_READ8_SP_INC, CPU_PCL_FROM_TMP_PCH_READ8_SP_INC, CPU_DELAY_CYCLE, CPU_GET_INSTRUCTION };
 
 static uint8_t cpu_rst00_arr[4] = { CPU_DELAY_CYCLE, CPU_SP_WRITE8_PCH_DEC, CPU_SP_WRITE8_PCL_DEC_PC_FROM_00, CPU_GET_INSTRUCTION };
 static uint8_t cpu_rst08_arr[4] = { CPU_DELAY_CYCLE, CPU_SP_WRITE8_PCH_DEC, CPU_SP_WRITE8_PCL_DEC_PC_FROM_08, CPU_GET_INSTRUCTION };
@@ -845,7 +852,7 @@ static uint8_t cpu_jrnc_arr[3] = { CPU_TMP_READ8_PC_INC_JRNC_CHK, CPU_TMP_ADD_PC
 static uint8_t cpu_jrc_arr[3] = { CPU_TMP_READ8_PC_INC_JRC_CHK, CPU_TMP_ADD_PC, CPU_GET_INSTRUCTION };
 
 static uint8_t cpu_di_arr[1] = { CPU_DI_GET_INSTRUCTION };
-static uint8_t cpu_ei_arr[1] = { CPU_EI_GET_INSTRUCTION };
+static uint8_t cpu_ei_arr[1] = { CPU_GET_INSTRUCTION_EI };
 static uint8_t cpu_scf_arr[1] = { CPU_SCF_GET_INSTRUCTION };
 static uint8_t cpu_ccf_arr[1] = { CPU_CCF_GET_INSTRUCTION };
 
@@ -1111,12 +1118,13 @@ void cpuGetInstruction()
 	}
 	if(cpuHaltLoop)
 	{
+		cpu_action_arr = cpu_nop_arr;
+		cpu_arr_pos = 0;
 		//happens when IME=0
 		if(!irqEnable && memGetCurIrqList())
 			cpuHaltLoop = false;
-		cpu_action_arr = cpu_nop_arr;
-		cpu_arr_pos = 0;
-		return;
+		else //keep waiting
+			return;
 	}
 	if(cpuStopLoop)
 	{
@@ -1146,6 +1154,35 @@ void cpuGetInstruction()
 	cpuHaltBug = false;
 }
 
+static bool cpu_oam_dma_started = false;
+static uint8_t cpu_oam_dma_pos = 0;
+static void cpuHandleOAMDMA()
+{
+	if(cpu_oam_dma)
+	{
+		if(!cpu_oam_dma_started)
+			cpu_oam_dma_started = true;
+		else
+		{
+			cpu_oam_dma = false;
+			cpu_oam_dma_started = false;
+			cpu_oam_dma_running = true;
+			cpu_oam_dma_pos = 0;
+		}
+	}
+	if(cpu_oam_dma_running)
+	{
+		if(cpu_oam_dma_pos == 0xA0)
+			cpu_oam_dma_running = false;
+		else
+		{
+			//printf("OAM Copying %02x\n", cpu_oam_dma_pos);
+			ppuSetOAMDMAVal(cpu_oam_dma_pos,memGet8(cpu_oam_dma_addr+cpu_oam_dma_pos));
+			cpu_oam_dma_pos++;
+		}
+	}
+}
+
 /* Main CPU Interpreter */
 bool cpuDmaHalt = false;
 
@@ -1153,6 +1190,7 @@ void cpuCycle()
 {
 	if(cpuDmaHalt)
 		return;
+	cpuHandleOAMDMA();
 	uint8_t cpu_action, sub_instr;
 	cpu_action = cpu_action_arr[cpu_arr_pos];
 	cpu_arr_pos++;
@@ -1244,9 +1282,6 @@ void cpuCycle()
 			cpu_arr_pos = 0;
 			break;
 		case CPU_DELAY_CYCLE:
-			break;
-		case CPU_DELAY_RETI_CYCLE:
-			//printf("RETI from %04x\n", pc);
 			break;
 		case CPU_ACTION_GET_INSTRUCTION:
 			cpu_action_func(&cpuTmp);
@@ -1587,6 +1622,12 @@ void cpuCycle()
 			cpuGetInstruction();
 			break;
 		case CPU_EI_GET_INSTRUCTION:
+			irqEnable = true;
+			//printf("Enabled IRQs and jmp to %04x ",pc);
+			cpuGetInstruction();
+			//printf("%04x\n",pc);
+			break;
+		case CPU_GET_INSTRUCTION_EI:
 			//printf("Enabled IRQs and jmp to %04x ",pc);
 			cpuGetInstruction();
 			//printf("%04x\n",pc);
@@ -1635,12 +1676,14 @@ void cpuSetSpeed(bool cgb)
 	{
 		//printf("CPU: CGB Speed\n");
 		cpuCgbSpeed = true;
+		cpuAddSpeed = 2;
 		cpuTimer = 1;
 	}
 	else
 	{
 		//printf("CPU: DMG Speed\n");
 		cpuCgbSpeed = false;
+		cpuAddSpeed = 1;
 		cpuTimer = 3;
 	}
 }
@@ -1656,7 +1699,8 @@ void cpuPlayGBS()
 	sp--;
 	memSet8(sp, 0x65);
 	//IMPORTANT: some GBS files dont work without this
-	a = 0, b = 0, c = 0, d = 0, e = 0, h = 0, l = 0;
+	//Keep HL though, some GBS files use them as global address
+	a = 0, b = 0, c = 0, d = 0, e = 0;//, h = 0, l = 0;
 	//jump to play
 	pc = gbsPlayAddr;
 	cpu_action_arr = cpu_nop_arr;
