@@ -28,7 +28,7 @@ int gbEmuLoadGame(const char *filename);
 void gbEmuMainLoop(void);
 void gbEmuDeinit(void);
 extern uint8_t inValReads[8];
-extern uint32_t textureImage[0x9A00];
+extern uint32_t textureImage[0x5A00];
 extern volatile bool emuRenderFrame;
 extern const char *VERSION_STRING;
 
@@ -69,7 +69,7 @@ void retro_get_system_av_info(struct retro_system_av_info *info)
    info->geometry.max_width   = VISIBLE_DOTS;
    info->geometry.max_height  = VISIBLE_LINES;
    info->geometry.aspect_ratio  = 0.0f;
-   info->timing.fps           = 60;
+   info->timing.fps           = 4194304.0 / 70224.0;
    info->timing.sample_rate   = (float)apuGetFrequency();
 }
 
@@ -218,6 +218,7 @@ size_t retro_get_memory_size(unsigned id)
 
 int audioUpdate()
 {
+#if 0
 #if AUDIO_FLOAT
    static int16_t buffer[512 * 2];
    float* buffer_in = (float*)apuGetBuf();
@@ -249,7 +250,25 @@ int audioUpdate()
    }
    audio_batch_cb(buffer_in, samples);
 #endif
+#endif
    return 1;
+}
+
+void apuFrameEnd();
+void audioFrameEnd(int samples)
+{
+#if AUDIO_FLOAT
+#else
+   uint16_t* buffer_in = (uint16_t*)apuGetBuf();
+   while (samples > 512)
+   {
+     audio_batch_cb(buffer_in, 512);
+     buffer_in += 1024;
+     samples -= 512;
+   }
+   if(samples)
+      audio_batch_cb(buffer_in, samples);
+#endif
 }
 
 void retro_run()
@@ -265,10 +284,10 @@ void retro_run()
    inValReads[BUTTON_UP]     = !!input_state_cb(0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_UP);
    inValReads[BUTTON_DOWN]   = !!input_state_cb(0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_DOWN);
 
-   while(!emuRenderFrame)
-      gbEmuMainLoop();
+   gbEmuMainLoop();
 
    video_cb(textureImage, VISIBLE_DOTS, VISIBLE_LINES, VISIBLE_DOTS * sizeof(uint32_t));
+   apuFrameEnd();
 
    emuRenderFrame = false;
 }

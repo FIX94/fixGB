@@ -134,7 +134,8 @@ void apuInitBufs()
 	//convert to 32bit int for calcs later
 	hpVal = (int32_t)((rc / (rc + dt))*32768.0);
 #endif
-	apuBufSize = apuFrequency/60*2;
+	//keep exactly 1 frame buffer
+	apuBufSize = 70224/16*2;
 #if AUDIO_FLOAT
 	apuBufSizeBytes = apuBufSize*sizeof(float);
 	apuOutBuf = (float*)malloc(apuBufSizeBytes);
@@ -213,6 +214,7 @@ bool apuCycle()
 {
 	if(curBufPos == apuBufSize)
 	{
+#ifndef __LIBRETRO__
 		int updateRes = audioUpdate();
 		if(updateRes == 0)
 		{
@@ -233,6 +235,7 @@ bool apuCycle()
 			else
 				emuSkipVsync = false;
 		}
+#endif
 		curBufPos = 0;
 	}
 	uint8_t p1OutLeft = lastP1OutLeft, p2OutLeft = lastP2OutLeft, 
@@ -374,6 +377,15 @@ bool apuCycle()
 #endif
 	return true;
 }
+
+#ifdef __LIBRETRO__
+void audioFrameEnd(int samples);
+void apuFrameEnd()
+{
+	audioFrameEnd(curBufPos>>1);
+	curBufPos = 0;
+}
+#endif
 
 void doEnvelopeLogic(envelope_t *env)
 {

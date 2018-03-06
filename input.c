@@ -20,8 +20,12 @@ uint8_t modeSelect = 3;
 
 void inputInit()
 {
-	memset(inValReads, 0, 8);
 	modeSelect = 3;
+}
+
+void inputClear()
+{
+	memset(inValReads, 0, 8);
 }
 
 void inputSet8(uint16_t addr, uint8_t in)

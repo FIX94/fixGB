@@ -32,7 +32,7 @@
 #define DEBUG_KEY 0
 #define DEBUG_LOAD_INFO 1
 
-const char *VERSION_STRING = "fixGB Alpha v0.8";
+const char *VERSION_STRING = "fixGB Alpha v0.8.1";
 static char window_title[256];
 static char window_title_pause[256];
 
@@ -107,8 +107,10 @@ static DWORD emuMainTotalElapsed = 0;
 static uint32_t linesToDraw = VISIBLE_LINES;
 static const uint32_t visibleImg = VISIBLE_DOTS*VISIBLE_LINES*4;
 static uint8_t scaleFactor = 3;
+#ifndef __LIBRETRO__
 static uint32_t mainLoopRuns;
 static uint16_t mainLoopPos;
+#endif
 //from input.c
 extern uint8_t inValReads[8];
 
@@ -182,6 +184,7 @@ int main(int argc, char** argv)
 		ppuInit();
 		apuInit();
 		inputInit();
+		inputClear();
 		if(emuGBROM[0x134] != 0)
 		{
 			if(gbCgbMode)
@@ -252,6 +255,7 @@ int main(int argc, char** argv)
 		}
 		free(tmpROM);
 		apuInitBufs();
+		inputClear();
 		//does all inits for us
 		memStartGBS();
 		gbEmuGBSPlayback = true;
@@ -278,10 +282,10 @@ int main(int argc, char** argv)
 	emuMainFrameStart = GetTickCount();
 	#endif
 	#endif
+	#ifndef __LIBRETRO__
 	//do one scanline per idle loop
 	mainLoopRuns = 70224;
 	mainLoopPos = mainLoopRuns;
-	#ifndef __LIBRETRO__
 	glutInit(&argc, argv);
 	glutInitWindowSize(VISIBLE_DOTS*scaleFactor, linesToDraw*scaleFactor);
 	glutInitDisplayMode(GLUT_DOUBLE | GLUT_RGBA);
@@ -510,6 +514,7 @@ void gbEmuMainLoop(void)
 	//do one scanline loop
 	do
 	{
+		#ifndef __LIBRETRO__
 		if((!emuSkipVsync && emuRenderFrame) || gbPause)
 		{
 			#if (WINDOWS_BUILD && DEBUG_MAIN_CALLS)
@@ -527,6 +532,11 @@ void gbEmuMainLoop(void)
 			audioSleep();
 			return;
 		}
+		#else
+		//run APU first to make sure its synced
+		if(!(mainClock&15))
+			apuCycle();
+		#endif
 		//channel timer updates
 		apuClockTimers();
 		//run possible DMA next
@@ -569,8 +579,12 @@ void gbEmuMainLoop(void)
 		}
 		mainClock++;
 	}
+	#ifndef __LIBRETRO__
 	while(mainLoopPos--);
 	mainLoopPos = mainLoopRuns;
+	#else
+	while(emuRenderFrame == false) ;
+	#endif
 	//update console stats if requested
 	#if (WINDOWS_BUILD && DEBUG_MAIN_CALLS)
 	emuMainTimesCalled++;
