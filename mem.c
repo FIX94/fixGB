@@ -544,9 +544,17 @@ void memInitGetSetPointers()
 	}
 }
 
+#ifdef __LIBRETRO__
+FILE *doOpenCGBBootrom();
+#endif
+
 bool memInitCGBBootrom()
 {
+#ifndef __LIBRETRO__
 	FILE *f = fopen("gbc_bios.bin","rb");
+#else
+	FILE *f = doOpenCGBBootrom();
+#endif
 	if(!f) return false;
 	fseek(f,0,SEEK_END);
 	if(ftell(f) < 0x900)

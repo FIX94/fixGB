@@ -271,6 +271,17 @@ void audioFrameEnd(int samples)
 #endif
 }
 
+static char cgbRomPath[4096];
+FILE *doOpenCGBBootrom()
+{
+   const char *dir = NULL;
+   if(!environ_cb(RETRO_ENVIRONMENT_GET_SYSTEM_DIRECTORY, &dir) || !dir)
+      return NULL;
+   snprintf(cgbRomPath, sizeof(cgbRomPath), "%s/gbc_bios.bin", dir);
+   FILE *f = fopen(cgbRomPath, "rb");
+   return f;
+}
+
 void retro_run()
 {
    input_poll_cb();
