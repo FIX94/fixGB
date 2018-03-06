@@ -9,6 +9,7 @@
 #include <stdbool.h>
 #include <string.h>
 #include <inttypes.h>
+#include <string.h>
 #include "mem.h"
 #include "cpu.h"
 #include "ppu.h"
@@ -93,7 +94,7 @@ static void memSetHiRAM8(uint16_t addr, uint8_t val);
 static void memSetGeneralReg8(uint16_t addr, uint8_t val);
 static void memSetInvalid8(uint16_t addr, uint8_t val);
 
-static void memLoadSave();
+void memLoadSave();
 
 static void memSetBankVal()
 {
@@ -863,6 +864,7 @@ void memDumpMainMem()
 	#endif
 }
 
+#ifndef __LIBRETRO__
 extern char emuSaveName[1024];
 void memLoadSave()
 {
@@ -904,6 +906,7 @@ void memSaveGame()
 		}
 	}
 }
+#endif
 
 extern bool gbEmuGBSPlayback;
 extern bool gbsTimerMode;

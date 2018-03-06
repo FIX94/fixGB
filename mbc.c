@@ -13,7 +13,7 @@
 #include "mem.h"
 #include "mbc.h"
 
-static uint8_t Ext_Mem[0x20000];
+uint8_t Ext_Mem[0x20000];
 static bool RamIOAllowed = false;
 set8FuncT mbcSet8;
 set8FuncT mbcSetRAM8;
