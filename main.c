@@ -392,7 +392,7 @@ static void gbEmuFileOpen(const char *name)
 					gbEmuFileIsZip = true;
 					if(strchr(name,'/') != NULL || strchr(name,'\\') != NULL)
 					{
-						char *nPath = name;
+						const char *nPath = name;
 						if(strchr(nPath,'/') != NULL)
 							nPath = (strrchr(nPath,'/')+1);
 						if(strchr(nPath,'\\') != NULL)
