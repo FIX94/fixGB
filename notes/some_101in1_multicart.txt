@@ -1,0 +1,68 @@
+Since I have the ability to dump gameboy carts now using my audio dumper:
+https://github.com/FIX94/gameboy-audio-dumper
+I decided to dump this one multicart I have laying around, just called "Super 101 in 1", always wanted to figure out how such a cart works for fun.
+
+The cart seems to have a 2mb rom with the following layout:
+0x000000-0x008000 - Q-Billion (J) with hacked in Game Selection Menu
+0x008000-0x010000 - Space Invaders (J)
+0x010000-0x018000 - Motocross Maniacs (J)
+0x018000-0x020000 - Alleyway (W)
+0x020000-0x028000 - Penguin Land (J)
+0x028000-0x030000 - Dr. Mario (W)
+0x030000-0x038000 - Tetris (W) (Rev A)
+0x038000-0x040000 - Soukoban 2 (J)
+0x040000-0x050000 - Super Mario Land (W) (Rev A)
+0x050000-0x060000 - Side Pocket (W)
+0x060000-0x080000 - TMNT III - Radical Rescue (U)
+0x080000-0x0A0000 - The Smurfs (E)
+0x0A0000-0x0C0000 - Hugo (E)
+0x0C0000-0x100000 - Pinocchio (E)
+0x100000-0x180000 - Hunchback (UE)
+0x180000-0x200000 - KOF 95 (U)
+
+The first game on the cart, q billion, was used to put in the game selection menu, there is quite a bit of free space
+at the end of that game so it was probably chosen for that reason, also a few jumps were added to go to the menu instead of the game at first.
+Every other game is unmodified, checked all hashes. Besides the added game selection menu there is no other modified data in q billion either.
+
+there are inner and outer bank regs, on boot, initial values are:
+outer_bank=0, outer_and=0x20, inner_bank=1, inner_and=0x3F
+
+The cart addresses work like this:
+on read:
+0000-3FFF - Total 16kb ROM Bank 0, used 16kb bank calculated like:
+			((outer_bank&outer_and)<<1);
+4000-7FFF - Total 16kb ROM Bank 1-63, used 16kb bank calculated like:
+			((outer_bank&outer_and)<<1)+(inner_bank&inner_and);
+A000-BFFF - seemingly nothing because of no RAM on cart
+
+on write:
+0000-1FFF - seemingly nothing because of no RAM on cart
+2000-3FFF - select inner 16kb ROM bank, set like:
+			if(val==0) val=1; inner_bank=(val&0x3F);
+4000-5FFF - seemingly nothing, upper ROM bits are selected with reg above, again no RAM
+6000-7FFF - select outer bank, write twice register
+write 1 - select outer 32kb ROM bank, set like:
+			outer_bank=(val&0x3F); - immediately applies on first write
+write 2 - val&0x1F selects inner and outer masks, calculated like:
+			inner_and=(~(val<<1))&0x3F; outer_and=0x20|(val&0x1F);
+			setting val&0x20 when writing to this will lock all further writes to this register until reset, done when selecting a game;
+			the game selection menu for some reason also always sets val&0x40, however in my testing this does seemingly nothing
+
+individual menu writes to 6000:
+on cart bootup - 00 5F
+q billion - 00 7F
+space invaders - 01 7F
+motocross maniacs - 02 7F
+alleyway - 03 7F
+penguin land - 04 7F
+dr mario - 05 7F
+tetris - 06 7F
+soukoban 2 - 07 7F
+super mario land - 08 7E
+side pocket - 0A 7E
+tmnt 3 - 0C 7C
+smurfs - 10 7C
+hugo - 14 7C
+pinocchio - 18 78
+hunchback - 20 70
+kof 95 - 30 70
