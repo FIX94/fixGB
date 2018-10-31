@@ -32,10 +32,6 @@ extern uint32_t textureImage[0x5A00];
 extern volatile bool emuRenderFrame;
 extern const char *VERSION_STRING;
 
-void memLoadSave()
-{
-
-}
 void memSaveGame()
 {
 
@@ -196,12 +192,17 @@ unsigned retro_get_region()
    return RETRO_REGION_NTSC;
 }
 
+extern bool emuSaveEnabled;
+extern char emuSaveName[1024];
+extern size_t extTotalSize;
 void *retro_get_memory_data(unsigned id)
 {
    switch(id & RETRO_MEMORY_MASK)
    {
    case RETRO_MEMORY_SAVE_RAM:
-      return Ext_Mem;
+      if(emuSaveName[0] && emuSaveEnabled && extTotalSize)
+         return Ext_Mem;
+      break;
    }
    return NULL;
 }
@@ -211,7 +212,9 @@ size_t retro_get_memory_size(unsigned id)
    switch(id & RETRO_MEMORY_MASK)
    {
    case RETRO_MEMORY_SAVE_RAM:
-      return sizeof(Ext_Mem);
+      if(emuSaveName[0] && emuSaveEnabled && extTotalSize)
+         return extTotalSize;
+      break;
    }
    return 0;
 }

@@ -28,15 +28,14 @@ extern uint16_t gbsSP;
 extern uint8_t cpuTimer;
 extern bool gbCgbMode;
 extern bool gbCgbBootrom;
-
-//used externally
-bool cpuDoStopSwitch = false;
-bool cpuCgbSpeed = false;
+//initalized elsewhere
 uint8_t cpuAddSpeed = 1;
-void cpuSetupActionArr();
-bool cpu_oam_dma = false;
-bool cpu_oam_dma_running = false;
-uint16_t cpu_oam_dma_addr = 0;
+bool cpuCgbSpeed = false;
+//used externally
+bool cpuDoStopSwitch;
+bool cpu_oam_dma;
+bool cpu_oam_dma_running;
+uint16_t cpu_oam_dma_addr;
 
 static uint16_t sp, pc, cpuTmp16;
 static uint8_t a,b,c,d,e,f,h,l,cpuTmp;
@@ -47,6 +46,18 @@ static bool gbsInitRet, gbsPlayRet;
 static uint8_t sub_in_val;
 static bool irqEnable;
 static bool cpuHaltLoop,cpuStopLoop,cpuHaltBug,cpuPrevInAny;
+
+static uint8_t curInstr;
+
+static bool cpu_oam_dma_started;
+static uint8_t cpu_oam_dma_pos;
+bool cpuDmaHalt;
+
+static void cpuSetupActionArr();
+static const uint8_t *cpu_action_arr;
+static uint8_t cpu_arr_pos;
+static inline void cpuSetNopArr();
+
 void cpuInit()
 {
 	sub_in_val=0,cpuTmp=0,cpuTmp16=0;
@@ -70,8 +81,8 @@ void cpuInit()
 	cpuHaltLoop = false;
 	cpuStopLoop = false;
 	cpuHaltBug = false;
-	cpuCgbSpeed = false;
 	cpuPrevInAny = false;
+	cpuDoStopSwitch = false;
 	cpu_oam_dma = false;
 	cpu_oam_dma_running = false;
 	cpu_oam_dma_addr = 0;
@@ -79,15 +90,22 @@ void cpuInit()
 	//gbs stuff
 	gbsInitRet = false; //for first init
 	gbsPlayRet = true; //for first play call
+
+	curInstr = 0;
+	cpu_oam_dma_started = false;
+	cpu_oam_dma_pos = 0;
+	cpuDmaHalt = false;
+
+	cpuSetNopArr();
 }
 
-static void setAImmRegStats()
+static inline void setAImmRegStats()
 {
 	f &= ~(P_FLAG_C|P_FLAG_H|P_FLAG_N|P_FLAG_Z);
 	if(a == 0) f |= P_FLAG_Z;
 }
 
-void cpuAdd16(uint16_t x)
+static inline void cpuAdd16(uint16_t x)
 {
 	uint32_t r1,r2;
 	r1=((h<<8)|l)+(x);
@@ -103,7 +121,7 @@ void cpuAdd16(uint16_t x)
 	f = tf;
 }
 
-uint16_t cpuAddSp16(uint8_t add)
+static inline int16_t cpuAddSp16(uint8_t add)
 {
 	int32_t n = (int8_t)add;
 	uint32_t r1,r2,r3;
@@ -123,7 +141,7 @@ uint16_t cpuAddSp16(uint8_t add)
 	return (uint16_t)r1;
 }
 
-void setAddSubCmpFlags(uint16_t r1, uint16_t r2)
+static inline void setAddSubCmpFlags(uint16_t r1, uint16_t r2)
 {
 	if(((uint8_t)r2)==0)
 		f |= P_FLAG_Z;
@@ -141,7 +159,7 @@ void setAddSubCmpFlags(uint16_t r1, uint16_t r2)
 		f &= ~P_FLAG_H;
 }
 
-uint8_t cpuDoAdd8(uint8_t x, uint8_t y)
+static inline uint8_t cpuDoAdd8(uint8_t x, uint8_t y)
 {
 	uint16_t r1,r2;
 	r1=(uint16_t)((x&0xF)+(y&0xF));
@@ -154,12 +172,12 @@ uint8_t cpuDoAdd8(uint8_t x, uint8_t y)
 	return (uint8_t)r2;
 }
 
-void cpuAdd8(uint8_t *reg)
+static void cpuAdd8(uint8_t *reg)
 {
 	a = cpuDoAdd8(a,*reg);
 }
 
-uint8_t cpuDoSub8(uint8_t x, uint8_t y)
+static inline uint8_t cpuDoSub8(uint8_t x, uint8_t y)
 {
 	uint16_t r1,r2;
 	r1=(uint16_t)((x&0xF)-(y&0xF));
@@ -172,17 +190,17 @@ uint8_t cpuDoSub8(uint8_t x, uint8_t y)
 	return (uint8_t)r2;
 }
 
-void cpuSub8(uint8_t *reg)
+static void cpuSub8(uint8_t *reg)
 {
 	a = cpuDoSub8(a,*reg);
 }
 
-void cpuCmp8(uint8_t *reg)
+static void cpuCmp8(uint8_t *reg)
 {
 	cpuDoSub8(a,*reg);
 }
 
-void cpuSbc8(uint8_t *reg)
+static void cpuSbc8(uint8_t *reg)
 {
 	uint16_t r1,r2;
 	uint8_t x = *reg;
@@ -196,7 +214,7 @@ void cpuSbc8(uint8_t *reg)
 	f |= P_FLAG_N;
 }
 
-void cpuAdc8(uint8_t *reg)
+static void cpuAdc8(uint8_t *reg)
 {
 	uint16_t r1,r2;
 	uint8_t x = *reg;
@@ -582,7 +600,7 @@ static void cpuDec(uint8_t *reg)
 	f|=tf;
 }
 
-void cpuDAA(uint8_t *reg)
+static void cpuDAA(uint8_t *reg)
 {
 	int16_t in = *reg;
 
@@ -744,130 +762,132 @@ enum {
 };
 
 /* arrays for multiple similar instructions */
-static uint8_t cpu_imm_arr[1] = { CPU_ACTION_GET_INSTRUCTION };
-static uint8_t cpu_imm_a_arr[1] = { CPU_A_ACTION_GET_INSTRUCTION };
-static uint8_t cpu_imm_b_arr[1] = { CPU_B_ACTION_GET_INSTRUCTION };
-static uint8_t cpu_imm_c_arr[1] = { CPU_C_ACTION_GET_INSTRUCTION };
-static uint8_t cpu_imm_d_arr[1] = { CPU_D_ACTION_GET_INSTRUCTION };
-static uint8_t cpu_imm_e_arr[1] = { CPU_E_ACTION_GET_INSTRUCTION };
-static uint8_t cpu_imm_h_arr[1] = { CPU_H_ACTION_GET_INSTRUCTION };
-static uint8_t cpu_imm_l_arr[1] = { CPU_L_ACTION_GET_INSTRUCTION };
-static uint8_t cpu_imm_bc_arr[2] = { CPU_TMP_READ8_BC, CPU_ACTION_GET_INSTRUCTION };
-static uint8_t cpu_imm_de_arr[2] = { CPU_TMP_READ8_DE, CPU_ACTION_GET_INSTRUCTION };
-static uint8_t cpu_imm_hl_arr[2] = { CPU_TMP_READ8_HL, CPU_ACTION_GET_INSTRUCTION };
-static uint8_t cpu_imm_pc_arr[2] = { CPU_TMP_READ8_PC_INC, CPU_ACTION_GET_INSTRUCTION };
-static uint8_t cpu_imm_hl_inc_arr[2] = { CPU_TMP_READ8_HL_INC, CPU_ACTION_GET_INSTRUCTION };
-static uint8_t cpu_imm_hl_dec_arr[2] = { CPU_TMP_READ8_HL_DEC, CPU_ACTION_GET_INSTRUCTION };
-static uint8_t cpu_imm_delay_arr[2] = { CPU_DELAY_CYCLE, CPU_ACTION_GET_INSTRUCTION };
-static uint8_t cpu_imm_hl_st_arr[3] = { CPU_TMP_READ8_HL, CPU_ACTION_WRITE8_HL, CPU_GET_INSTRUCTION };
+static const uint8_t cpu_imm_arr[1] = { CPU_ACTION_GET_INSTRUCTION };
+static const uint8_t cpu_imm_a_arr[1] = { CPU_A_ACTION_GET_INSTRUCTION };
+static const uint8_t cpu_imm_b_arr[1] = { CPU_B_ACTION_GET_INSTRUCTION };
+static const uint8_t cpu_imm_c_arr[1] = { CPU_C_ACTION_GET_INSTRUCTION };
+static const uint8_t cpu_imm_d_arr[1] = { CPU_D_ACTION_GET_INSTRUCTION };
+static const uint8_t cpu_imm_e_arr[1] = { CPU_E_ACTION_GET_INSTRUCTION };
+static const uint8_t cpu_imm_h_arr[1] = { CPU_H_ACTION_GET_INSTRUCTION };
+static const uint8_t cpu_imm_l_arr[1] = { CPU_L_ACTION_GET_INSTRUCTION };
+static const uint8_t cpu_imm_bc_arr[2] = { CPU_TMP_READ8_BC, CPU_ACTION_GET_INSTRUCTION };
+static const uint8_t cpu_imm_de_arr[2] = { CPU_TMP_READ8_DE, CPU_ACTION_GET_INSTRUCTION };
+static const uint8_t cpu_imm_hl_arr[2] = { CPU_TMP_READ8_HL, CPU_ACTION_GET_INSTRUCTION };
+static const uint8_t cpu_imm_pc_arr[2] = { CPU_TMP_READ8_PC_INC, CPU_ACTION_GET_INSTRUCTION };
+static const uint8_t cpu_imm_hl_inc_arr[2] = { CPU_TMP_READ8_HL_INC, CPU_ACTION_GET_INSTRUCTION };
+static const uint8_t cpu_imm_hl_dec_arr[2] = { CPU_TMP_READ8_HL_DEC, CPU_ACTION_GET_INSTRUCTION };
+static const uint8_t cpu_imm_delay_arr[2] = { CPU_DELAY_CYCLE, CPU_ACTION_GET_INSTRUCTION };
+static const uint8_t cpu_imm_hl_st_arr[3] = { CPU_TMP_READ8_HL, CPU_ACTION_WRITE8_HL, CPU_GET_INSTRUCTION };
 
 /* arrays for single special instructions */
-static uint8_t cpu_nop_arr[1] = { CPU_GET_INSTRUCTION };
-static uint8_t cpu_sub_arr[1] = { CPU_GET_SUBINSTRUCTION };
-static uint8_t cpu_hljmp_arr[1] = { CPU_PC_FROM_HL_GET_INSTRUCTION };
-static uint8_t cpu_sp_from_hl_arr[2] = { CPU_SP_FROM_HL, CPU_GET_INSTRUCTION };
-static uint8_t cpu_absjmp_arr[4] = { CPU_TMP_READ8_PC_INC, CPU_PCL_FROM_TMP_PCH_READ8_PC, CPU_DELAY_CYCLE, CPU_GET_INSTRUCTION };
-static uint8_t cpu_absjmpnz_arr[4] = { CPU_TMP_READ8_PC_INC, CPU_T16L_FROM_TMP_T16H_READ8_PC_INC_JPNZ_CHK, CPU_PC_FROM_T16, CPU_GET_INSTRUCTION };
-static uint8_t cpu_absjmpnc_arr[4] = { CPU_TMP_READ8_PC_INC, CPU_T16L_FROM_TMP_T16H_READ8_PC_INC_JPNC_CHK, CPU_PC_FROM_T16, CPU_GET_INSTRUCTION };
-static uint8_t cpu_absjmpz_arr[4] = { CPU_TMP_READ8_PC_INC, CPU_T16L_FROM_TMP_T16H_READ8_PC_INC_JPZ_CHK, CPU_PC_FROM_T16, CPU_GET_INSTRUCTION };
-static uint8_t cpu_absjmpc_arr[4] = { CPU_TMP_READ8_PC_INC, CPU_T16L_FROM_TMP_T16H_READ8_PC_INC_JPC_CHK, CPU_PC_FROM_T16, CPU_GET_INSTRUCTION };
+static const uint8_t cpu_nop_arr[1] = { CPU_GET_INSTRUCTION };
+static const uint8_t cpu_sub_arr[1] = { CPU_GET_SUBINSTRUCTION };
+static const uint8_t cpu_hljmp_arr[1] = { CPU_PC_FROM_HL_GET_INSTRUCTION };
+static const uint8_t cpu_sp_from_hl_arr[2] = { CPU_SP_FROM_HL, CPU_GET_INSTRUCTION };
+static const uint8_t cpu_absjmp_arr[4] = { CPU_TMP_READ8_PC_INC, CPU_PCL_FROM_TMP_PCH_READ8_PC, CPU_DELAY_CYCLE, CPU_GET_INSTRUCTION };
+static const uint8_t cpu_absjmpnz_arr[4] = { CPU_TMP_READ8_PC_INC, CPU_T16L_FROM_TMP_T16H_READ8_PC_INC_JPNZ_CHK, CPU_PC_FROM_T16, CPU_GET_INSTRUCTION };
+static const uint8_t cpu_absjmpnc_arr[4] = { CPU_TMP_READ8_PC_INC, CPU_T16L_FROM_TMP_T16H_READ8_PC_INC_JPNC_CHK, CPU_PC_FROM_T16, CPU_GET_INSTRUCTION };
+static const uint8_t cpu_absjmpz_arr[4] = { CPU_TMP_READ8_PC_INC, CPU_T16L_FROM_TMP_T16H_READ8_PC_INC_JPZ_CHK, CPU_PC_FROM_T16, CPU_GET_INSTRUCTION };
+static const uint8_t cpu_absjmpc_arr[4] = { CPU_TMP_READ8_PC_INC, CPU_T16L_FROM_TMP_T16H_READ8_PC_INC_JPC_CHK, CPU_PC_FROM_T16, CPU_GET_INSTRUCTION };
 
-static uint8_t cpu_abscall_arr[6] = { CPU_TMP_READ8_PC_INC, CPU_T16L_FROM_TMP_T16H_READ8_PC_INC, CPU_DELAY_CYCLE, CPU_SP_WRITE8_PCH_DEC, CPU_SP_WRITE8_PCL_DEC_PC_FROM_T16, CPU_GET_INSTRUCTION };
-static uint8_t cpu_abscallnz_arr[6] = { CPU_TMP_READ8_PC_INC, CPU_T16L_FROM_TMP_T16H_READ8_PC_INC_CNZ_CHK, CPU_DELAY_CYCLE, CPU_SP_WRITE8_PCH_DEC, CPU_SP_WRITE8_PCL_DEC_PC_FROM_T16, CPU_GET_INSTRUCTION };
-static uint8_t cpu_abscallnc_arr[6] = { CPU_TMP_READ8_PC_INC, CPU_T16L_FROM_TMP_T16H_READ8_PC_INC_CNC_CHK, CPU_DELAY_CYCLE, CPU_SP_WRITE8_PCH_DEC, CPU_SP_WRITE8_PCL_DEC_PC_FROM_T16, CPU_GET_INSTRUCTION };
-static uint8_t cpu_abscallz_arr[6] = { CPU_TMP_READ8_PC_INC, CPU_T16L_FROM_TMP_T16H_READ8_PC_INC_CZ_CHK, CPU_DELAY_CYCLE, CPU_SP_WRITE8_PCH_DEC, CPU_SP_WRITE8_PCL_DEC_PC_FROM_T16, CPU_GET_INSTRUCTION };
-static uint8_t cpu_abscallc_arr[6] = { CPU_TMP_READ8_PC_INC, CPU_T16L_FROM_TMP_T16H_READ8_PC_INC_CC_CHK, CPU_DELAY_CYCLE, CPU_SP_WRITE8_PCH_DEC, CPU_SP_WRITE8_PCL_DEC_PC_FROM_T16, CPU_GET_INSTRUCTION };
+static const uint8_t cpu_abscall_arr[6] = { CPU_TMP_READ8_PC_INC, CPU_T16L_FROM_TMP_T16H_READ8_PC_INC, CPU_DELAY_CYCLE, CPU_SP_WRITE8_PCH_DEC, CPU_SP_WRITE8_PCL_DEC_PC_FROM_T16, CPU_GET_INSTRUCTION };
+static const uint8_t cpu_abscallnz_arr[6] = { CPU_TMP_READ8_PC_INC, CPU_T16L_FROM_TMP_T16H_READ8_PC_INC_CNZ_CHK, CPU_DELAY_CYCLE, CPU_SP_WRITE8_PCH_DEC, CPU_SP_WRITE8_PCL_DEC_PC_FROM_T16, CPU_GET_INSTRUCTION };
+static const uint8_t cpu_abscallnc_arr[6] = { CPU_TMP_READ8_PC_INC, CPU_T16L_FROM_TMP_T16H_READ8_PC_INC_CNC_CHK, CPU_DELAY_CYCLE, CPU_SP_WRITE8_PCH_DEC, CPU_SP_WRITE8_PCL_DEC_PC_FROM_T16, CPU_GET_INSTRUCTION };
+static const uint8_t cpu_abscallz_arr[6] = { CPU_TMP_READ8_PC_INC, CPU_T16L_FROM_TMP_T16H_READ8_PC_INC_CZ_CHK, CPU_DELAY_CYCLE, CPU_SP_WRITE8_PCH_DEC, CPU_SP_WRITE8_PCL_DEC_PC_FROM_T16, CPU_GET_INSTRUCTION };
+static const uint8_t cpu_abscallc_arr[6] = { CPU_TMP_READ8_PC_INC, CPU_T16L_FROM_TMP_T16H_READ8_PC_INC_CC_CHK, CPU_DELAY_CYCLE, CPU_SP_WRITE8_PCH_DEC, CPU_SP_WRITE8_PCL_DEC_PC_FROM_T16, CPU_GET_INSTRUCTION };
 
-static uint8_t cpu_ret_arr[4] = { CPU_TMP_READ8_SP_INC, CPU_PCL_FROM_TMP_PCH_READ8_SP_INC, CPU_DELAY_CYCLE, CPU_GET_INSTRUCTION };
-static uint8_t cpu_reti_arr[4] = { CPU_TMP_READ8_SP_INC, CPU_PCL_FROM_TMP_PCH_READ8_SP_INC, CPU_DELAY_CYCLE, CPU_EI_GET_INSTRUCTION };
-static uint8_t cpu_retnz_arr[5] = { CPU_RET_NZ_CHK, CPU_TMP_READ8_SP_INC, CPU_PCL_FROM_TMP_PCH_READ8_SP_INC, CPU_DELAY_CYCLE, CPU_GET_INSTRUCTION };
-static uint8_t cpu_retnc_arr[5] = { CPU_RET_NC_CHK, CPU_TMP_READ8_SP_INC, CPU_PCL_FROM_TMP_PCH_READ8_SP_INC, CPU_DELAY_CYCLE, CPU_GET_INSTRUCTION };
-static uint8_t cpu_retz_arr[5] = { CPU_RET_Z_CHK, CPU_TMP_READ8_SP_INC, CPU_PCL_FROM_TMP_PCH_READ8_SP_INC, CPU_DELAY_CYCLE, CPU_GET_INSTRUCTION };
-static uint8_t cpu_retc_arr[5] = { CPU_RET_C_CHK, CPU_TMP_READ8_SP_INC, CPU_PCL_FROM_TMP_PCH_READ8_SP_INC, CPU_DELAY_CYCLE, CPU_GET_INSTRUCTION };
+static const uint8_t cpu_ret_arr[4] = { CPU_TMP_READ8_SP_INC, CPU_PCL_FROM_TMP_PCH_READ8_SP_INC, CPU_DELAY_CYCLE, CPU_GET_INSTRUCTION };
+static const uint8_t cpu_reti_arr[4] = { CPU_TMP_READ8_SP_INC, CPU_PCL_FROM_TMP_PCH_READ8_SP_INC, CPU_DELAY_CYCLE, CPU_EI_GET_INSTRUCTION };
+static const uint8_t cpu_retnz_arr[5] = { CPU_RET_NZ_CHK, CPU_TMP_READ8_SP_INC, CPU_PCL_FROM_TMP_PCH_READ8_SP_INC, CPU_DELAY_CYCLE, CPU_GET_INSTRUCTION };
+static const uint8_t cpu_retnc_arr[5] = { CPU_RET_NC_CHK, CPU_TMP_READ8_SP_INC, CPU_PCL_FROM_TMP_PCH_READ8_SP_INC, CPU_DELAY_CYCLE, CPU_GET_INSTRUCTION };
+static const uint8_t cpu_retz_arr[5] = { CPU_RET_Z_CHK, CPU_TMP_READ8_SP_INC, CPU_PCL_FROM_TMP_PCH_READ8_SP_INC, CPU_DELAY_CYCLE, CPU_GET_INSTRUCTION };
+static const uint8_t cpu_retc_arr[5] = { CPU_RET_C_CHK, CPU_TMP_READ8_SP_INC, CPU_PCL_FROM_TMP_PCH_READ8_SP_INC, CPU_DELAY_CYCLE, CPU_GET_INSTRUCTION };
 
-static uint8_t cpu_rst00_arr[4] = { CPU_DELAY_CYCLE, CPU_SP_WRITE8_PCH_DEC, CPU_SP_WRITE8_PCL_DEC_PC_FROM_00, CPU_GET_INSTRUCTION };
-static uint8_t cpu_rst08_arr[4] = { CPU_DELAY_CYCLE, CPU_SP_WRITE8_PCH_DEC, CPU_SP_WRITE8_PCL_DEC_PC_FROM_08, CPU_GET_INSTRUCTION };
-static uint8_t cpu_rst10_arr[4] = { CPU_DELAY_CYCLE, CPU_SP_WRITE8_PCH_DEC, CPU_SP_WRITE8_PCL_DEC_PC_FROM_10, CPU_GET_INSTRUCTION };
-static uint8_t cpu_rst18_arr[4] = { CPU_DELAY_CYCLE, CPU_SP_WRITE8_PCH_DEC, CPU_SP_WRITE8_PCL_DEC_PC_FROM_18, CPU_GET_INSTRUCTION };
-static uint8_t cpu_rst20_arr[4] = { CPU_DELAY_CYCLE, CPU_SP_WRITE8_PCH_DEC, CPU_SP_WRITE8_PCL_DEC_PC_FROM_20, CPU_GET_INSTRUCTION };
-static uint8_t cpu_rst28_arr[4] = { CPU_DELAY_CYCLE, CPU_SP_WRITE8_PCH_DEC, CPU_SP_WRITE8_PCL_DEC_PC_FROM_28, CPU_GET_INSTRUCTION };
-static uint8_t cpu_rst30_arr[4] = { CPU_DELAY_CYCLE, CPU_SP_WRITE8_PCH_DEC, CPU_SP_WRITE8_PCL_DEC_PC_FROM_30, CPU_GET_INSTRUCTION };
-static uint8_t cpu_rst38_arr[4] = { CPU_DELAY_CYCLE, CPU_SP_WRITE8_PCH_DEC, CPU_SP_WRITE8_PCL_DEC_PC_FROM_38, CPU_GET_INSTRUCTION };
-static uint8_t cpu_rst40_arr[5] = { CPU_DELAY_CYCLE, CPU_DELAY_CYCLE, CPU_SP_WRITE8_PCH_DEC, CPU_SP_WRITE8_PCL_DEC_PC_FROM_40, CPU_GET_INSTRUCTION };
-static uint8_t cpu_rst48_arr[5] = { CPU_DELAY_CYCLE, CPU_DELAY_CYCLE, CPU_SP_WRITE8_PCH_DEC, CPU_SP_WRITE8_PCL_DEC_PC_FROM_48, CPU_GET_INSTRUCTION };
-static uint8_t cpu_rst50_arr[5] = { CPU_DELAY_CYCLE, CPU_DELAY_CYCLE, CPU_SP_WRITE8_PCH_DEC, CPU_SP_WRITE8_PCL_DEC_PC_FROM_50, CPU_GET_INSTRUCTION };
-static uint8_t cpu_rst58_arr[5] = { CPU_DELAY_CYCLE, CPU_DELAY_CYCLE, CPU_SP_WRITE8_PCH_DEC, CPU_SP_WRITE8_PCL_DEC_PC_FROM_58, CPU_GET_INSTRUCTION };
-static uint8_t cpu_rst60_arr[5] = { CPU_DELAY_CYCLE, CPU_DELAY_CYCLE, CPU_SP_WRITE8_PCH_DEC, CPU_SP_WRITE8_PCL_DEC_PC_FROM_60, CPU_GET_INSTRUCTION };
+static const uint8_t cpu_rst00_arr[4] = { CPU_DELAY_CYCLE, CPU_SP_WRITE8_PCH_DEC, CPU_SP_WRITE8_PCL_DEC_PC_FROM_00, CPU_GET_INSTRUCTION };
+static const uint8_t cpu_rst08_arr[4] = { CPU_DELAY_CYCLE, CPU_SP_WRITE8_PCH_DEC, CPU_SP_WRITE8_PCL_DEC_PC_FROM_08, CPU_GET_INSTRUCTION };
+static const uint8_t cpu_rst10_arr[4] = { CPU_DELAY_CYCLE, CPU_SP_WRITE8_PCH_DEC, CPU_SP_WRITE8_PCL_DEC_PC_FROM_10, CPU_GET_INSTRUCTION };
+static const uint8_t cpu_rst18_arr[4] = { CPU_DELAY_CYCLE, CPU_SP_WRITE8_PCH_DEC, CPU_SP_WRITE8_PCL_DEC_PC_FROM_18, CPU_GET_INSTRUCTION };
+static const uint8_t cpu_rst20_arr[4] = { CPU_DELAY_CYCLE, CPU_SP_WRITE8_PCH_DEC, CPU_SP_WRITE8_PCL_DEC_PC_FROM_20, CPU_GET_INSTRUCTION };
+static const uint8_t cpu_rst28_arr[4] = { CPU_DELAY_CYCLE, CPU_SP_WRITE8_PCH_DEC, CPU_SP_WRITE8_PCL_DEC_PC_FROM_28, CPU_GET_INSTRUCTION };
+static const uint8_t cpu_rst30_arr[4] = { CPU_DELAY_CYCLE, CPU_SP_WRITE8_PCH_DEC, CPU_SP_WRITE8_PCL_DEC_PC_FROM_30, CPU_GET_INSTRUCTION };
+static const uint8_t cpu_rst38_arr[4] = { CPU_DELAY_CYCLE, CPU_SP_WRITE8_PCH_DEC, CPU_SP_WRITE8_PCL_DEC_PC_FROM_38, CPU_GET_INSTRUCTION };
+static const uint8_t cpu_rst40_arr[5] = { CPU_DELAY_CYCLE, CPU_DELAY_CYCLE, CPU_SP_WRITE8_PCH_DEC, CPU_SP_WRITE8_PCL_DEC_PC_FROM_40, CPU_GET_INSTRUCTION };
+static const uint8_t cpu_rst48_arr[5] = { CPU_DELAY_CYCLE, CPU_DELAY_CYCLE, CPU_SP_WRITE8_PCH_DEC, CPU_SP_WRITE8_PCL_DEC_PC_FROM_48, CPU_GET_INSTRUCTION };
+static const uint8_t cpu_rst50_arr[5] = { CPU_DELAY_CYCLE, CPU_DELAY_CYCLE, CPU_SP_WRITE8_PCH_DEC, CPU_SP_WRITE8_PCL_DEC_PC_FROM_50, CPU_GET_INSTRUCTION };
+static const uint8_t cpu_rst58_arr[5] = { CPU_DELAY_CYCLE, CPU_DELAY_CYCLE, CPU_SP_WRITE8_PCH_DEC, CPU_SP_WRITE8_PCL_DEC_PC_FROM_58, CPU_GET_INSTRUCTION };
+static const uint8_t cpu_rst60_arr[5] = { CPU_DELAY_CYCLE, CPU_DELAY_CYCLE, CPU_SP_WRITE8_PCH_DEC, CPU_SP_WRITE8_PCL_DEC_PC_FROM_60, CPU_GET_INSTRUCTION };
 
-static uint8_t cpu_push_bc_arr[4] = { CPU_DELAY_CYCLE, CPU_SP_WRITE8_B_DEC, CPU_SP_WRITE8_C_DEC, CPU_GET_INSTRUCTION };
-static uint8_t cpu_push_de_arr[4] = { CPU_DELAY_CYCLE, CPU_SP_WRITE8_D_DEC, CPU_SP_WRITE8_E_DEC, CPU_GET_INSTRUCTION };
-static uint8_t cpu_push_hl_arr[4] = { CPU_DELAY_CYCLE, CPU_SP_WRITE8_H_DEC, CPU_SP_WRITE8_L_DEC, CPU_GET_INSTRUCTION };
-static uint8_t cpu_push_af_arr[4] = { CPU_DELAY_CYCLE, CPU_SP_WRITE8_A_DEC, CPU_SP_WRITE8_F_DEC, CPU_GET_INSTRUCTION };
+static const uint8_t cpu_push_bc_arr[4] = { CPU_DELAY_CYCLE, CPU_SP_WRITE8_B_DEC, CPU_SP_WRITE8_C_DEC, CPU_GET_INSTRUCTION };
+static const uint8_t cpu_push_de_arr[4] = { CPU_DELAY_CYCLE, CPU_SP_WRITE8_D_DEC, CPU_SP_WRITE8_E_DEC, CPU_GET_INSTRUCTION };
+static const uint8_t cpu_push_hl_arr[4] = { CPU_DELAY_CYCLE, CPU_SP_WRITE8_H_DEC, CPU_SP_WRITE8_L_DEC, CPU_GET_INSTRUCTION };
+static const uint8_t cpu_push_af_arr[4] = { CPU_DELAY_CYCLE, CPU_SP_WRITE8_A_DEC, CPU_SP_WRITE8_F_DEC, CPU_GET_INSTRUCTION };
 
-static uint8_t cpu_pop_bc_arr[3] = { CPU_TMP_READ8_SP_INC, CPU_C_FROM_TMP_B_READ8_SP_INC, CPU_GET_INSTRUCTION };
-static uint8_t cpu_pop_de_arr[3] = { CPU_TMP_READ8_SP_INC, CPU_E_FROM_TMP_D_READ8_SP_INC, CPU_GET_INSTRUCTION };
-static uint8_t cpu_pop_hl_arr[3] = { CPU_TMP_READ8_SP_INC, CPU_L_FROM_TMP_H_READ8_SP_INC, CPU_GET_INSTRUCTION };
-static uint8_t cpu_pop_af_arr[3] = { CPU_TMP_READ8_SP_INC, CPU_F_FROM_TMP_A_READ8_SP_INC, CPU_GET_INSTRUCTION };
+static const uint8_t cpu_pop_bc_arr[3] = { CPU_TMP_READ8_SP_INC, CPU_C_FROM_TMP_B_READ8_SP_INC, CPU_GET_INSTRUCTION };
+static const uint8_t cpu_pop_de_arr[3] = { CPU_TMP_READ8_SP_INC, CPU_E_FROM_TMP_D_READ8_SP_INC, CPU_GET_INSTRUCTION };
+static const uint8_t cpu_pop_hl_arr[3] = { CPU_TMP_READ8_SP_INC, CPU_L_FROM_TMP_H_READ8_SP_INC, CPU_GET_INSTRUCTION };
+static const uint8_t cpu_pop_af_arr[3] = { CPU_TMP_READ8_SP_INC, CPU_F_FROM_TMP_A_READ8_SP_INC, CPU_GET_INSTRUCTION };
 
-static uint8_t cpu_ld_a_arr[2] = { CPU_A_READ8_PC_INC, CPU_GET_INSTRUCTION };
-static uint8_t cpu_ld_b_arr[2] = { CPU_B_READ8_PC_INC, CPU_GET_INSTRUCTION };
-static uint8_t cpu_ld_c_arr[2] = { CPU_C_READ8_PC_INC, CPU_GET_INSTRUCTION };
-static uint8_t cpu_ld_d_arr[2] = { CPU_D_READ8_PC_INC, CPU_GET_INSTRUCTION };
-static uint8_t cpu_ld_e_arr[2] = { CPU_E_READ8_PC_INC, CPU_GET_INSTRUCTION };
-static uint8_t cpu_ld_h_arr[2] = { CPU_H_READ8_PC_INC, CPU_GET_INSTRUCTION };
-static uint8_t cpu_ld_l_arr[2] = { CPU_L_READ8_PC_INC, CPU_GET_INSTRUCTION };
+static const uint8_t cpu_ld_a_arr[2] = { CPU_A_READ8_PC_INC, CPU_GET_INSTRUCTION };
+static const uint8_t cpu_ld_b_arr[2] = { CPU_B_READ8_PC_INC, CPU_GET_INSTRUCTION };
+static const uint8_t cpu_ld_c_arr[2] = { CPU_C_READ8_PC_INC, CPU_GET_INSTRUCTION };
+static const uint8_t cpu_ld_d_arr[2] = { CPU_D_READ8_PC_INC, CPU_GET_INSTRUCTION };
+static const uint8_t cpu_ld_e_arr[2] = { CPU_E_READ8_PC_INC, CPU_GET_INSTRUCTION };
+static const uint8_t cpu_ld_h_arr[2] = { CPU_H_READ8_PC_INC, CPU_GET_INSTRUCTION };
+static const uint8_t cpu_ld_l_arr[2] = { CPU_L_READ8_PC_INC, CPU_GET_INSTRUCTION };
 
-static uint8_t cpu_ldhc_a_arr[2] = { CPU_C_READHIGH_A, CPU_GET_INSTRUCTION };
+static const uint8_t cpu_ldhc_a_arr[2] = { CPU_C_READHIGH_A, CPU_GET_INSTRUCTION };
 
-static uint8_t cpu_ldh_a_arr[3] = { CPU_TMP_READ8_PC_INC, CPU_TMP_READHIGH_A, CPU_GET_INSTRUCTION };
+static const uint8_t cpu_ldh_a_arr[3] = { CPU_TMP_READ8_PC_INC, CPU_TMP_READHIGH_A, CPU_GET_INSTRUCTION };
 
-static uint8_t cpu_ld_bc_arr[3] = { CPU_C_READ8_PC_INC, CPU_B_READ8_PC_INC, CPU_GET_INSTRUCTION };
-static uint8_t cpu_ld_de_arr[3] = { CPU_E_READ8_PC_INC, CPU_D_READ8_PC_INC, CPU_GET_INSTRUCTION };
-static uint8_t cpu_ld_hl_arr[3] = { CPU_L_READ8_PC_INC, CPU_H_READ8_PC_INC, CPU_GET_INSTRUCTION };
-static uint8_t cpu_ld_sp_arr[3] = { CPU_TMP_READ8_PC_INC, CPU_SPL_FROM_TMP_SPH_READ8_PC_INC, CPU_GET_INSTRUCTION };
+static const uint8_t cpu_ld_bc_arr[3] = { CPU_C_READ8_PC_INC, CPU_B_READ8_PC_INC, CPU_GET_INSTRUCTION };
+static const uint8_t cpu_ld_de_arr[3] = { CPU_E_READ8_PC_INC, CPU_D_READ8_PC_INC, CPU_GET_INSTRUCTION };
+static const uint8_t cpu_ld_hl_arr[3] = { CPU_L_READ8_PC_INC, CPU_H_READ8_PC_INC, CPU_GET_INSTRUCTION };
+static const uint8_t cpu_ld_sp_arr[3] = { CPU_TMP_READ8_PC_INC, CPU_SPL_FROM_TMP_SPH_READ8_PC_INC, CPU_GET_INSTRUCTION };
 
-static uint8_t cpu_ld16_a_arr[4] = { CPU_TMP_READ8_PC_INC, CPU_T16L_FROM_TMP_T16H_READ8_PC_INC, CPU_A_READ8_TMP16, CPU_GET_INSTRUCTION };
+static const uint8_t cpu_ld16_a_arr[4] = { CPU_TMP_READ8_PC_INC, CPU_T16L_FROM_TMP_T16H_READ8_PC_INC, CPU_A_READ8_TMP16, CPU_GET_INSTRUCTION };
 
-static uint8_t cpu_st_a_arr[2] = { CPU_A_ACTION_WRITE, CPU_GET_INSTRUCTION };
-static uint8_t cpu_st_b_arr[2] = { CPU_B_ACTION_WRITE, CPU_GET_INSTRUCTION };
-static uint8_t cpu_st_c_arr[2] = { CPU_C_ACTION_WRITE, CPU_GET_INSTRUCTION };
-static uint8_t cpu_st_d_arr[2] = { CPU_D_ACTION_WRITE, CPU_GET_INSTRUCTION };
-static uint8_t cpu_st_e_arr[2] = { CPU_E_ACTION_WRITE, CPU_GET_INSTRUCTION };
-static uint8_t cpu_st_h_arr[2] = { CPU_H_ACTION_WRITE, CPU_GET_INSTRUCTION };
-static uint8_t cpu_st_l_arr[2] = { CPU_L_ACTION_WRITE, CPU_GET_INSTRUCTION };
+static const uint8_t cpu_st_a_arr[2] = { CPU_A_ACTION_WRITE, CPU_GET_INSTRUCTION };
+static const uint8_t cpu_st_b_arr[2] = { CPU_B_ACTION_WRITE, CPU_GET_INSTRUCTION };
+static const uint8_t cpu_st_c_arr[2] = { CPU_C_ACTION_WRITE, CPU_GET_INSTRUCTION };
+static const uint8_t cpu_st_d_arr[2] = { CPU_D_ACTION_WRITE, CPU_GET_INSTRUCTION };
+static const uint8_t cpu_st_e_arr[2] = { CPU_E_ACTION_WRITE, CPU_GET_INSTRUCTION };
+static const uint8_t cpu_st_h_arr[2] = { CPU_H_ACTION_WRITE, CPU_GET_INSTRUCTION };
+static const uint8_t cpu_st_l_arr[2] = { CPU_L_ACTION_WRITE, CPU_GET_INSTRUCTION };
 
-static uint8_t cpu_st_imm_arr[3] = { CPU_TMP_READ8_PC_INC, CPU_ACTION_WRITE, CPU_GET_INSTRUCTION };
+static const uint8_t cpu_st_imm_arr[3] = { CPU_TMP_READ8_PC_INC, CPU_ACTION_WRITE, CPU_GET_INSTRUCTION };
 
-static uint8_t cpu_sthc_a_arr[2] = { CPU_C_WRITEHIGH_A, CPU_GET_INSTRUCTION };
-static uint8_t cpu_sth_a_arr[3] = { CPU_TMP_READ8_PC_INC, CPU_TMP_WRITEHIGH_A, CPU_GET_INSTRUCTION };
+static const uint8_t cpu_sthc_a_arr[2] = { CPU_C_WRITEHIGH_A, CPU_GET_INSTRUCTION };
+static const uint8_t cpu_sth_a_arr[3] = { CPU_TMP_READ8_PC_INC, CPU_TMP_WRITEHIGH_A, CPU_GET_INSTRUCTION };
 
-static uint8_t cpu_st16_a_arr[4] = { CPU_TMP_READ8_PC_INC, CPU_T16L_FROM_TMP_T16H_READ8_PC_INC, CPU_A_ACTION_WRITE, CPU_GET_INSTRUCTION };
+static const uint8_t cpu_st16_a_arr[4] = { CPU_TMP_READ8_PC_INC, CPU_T16L_FROM_TMP_T16H_READ8_PC_INC, CPU_A_ACTION_WRITE, CPU_GET_INSTRUCTION };
 
-static uint8_t cpu_st16_sp_arr[5] = { CPU_TMP_READ8_PC_INC, CPU_T16L_FROM_TMP_T16H_READ8_PC_INC, CPU_TMP16_WRITE8_SPL_INC, CPU_TMP16_WRITE8_SPH, CPU_GET_INSTRUCTION };
+static const uint8_t cpu_st16_sp_arr[5] = { CPU_TMP_READ8_PC_INC, CPU_T16L_FROM_TMP_T16H_READ8_PC_INC, CPU_TMP16_WRITE8_SPL_INC, CPU_TMP16_WRITE8_SPH, CPU_GET_INSTRUCTION };
 
-static uint8_t cpu_jr_arr[3] = { CPU_TMP_READ8_PC_INC, CPU_TMP_ADD_PC, CPU_GET_INSTRUCTION };
-static uint8_t cpu_jrnz_arr[3] = { CPU_TMP_READ8_PC_INC_JRNZ_CHK, CPU_TMP_ADD_PC, CPU_GET_INSTRUCTION };
-static uint8_t cpu_jrz_arr[3] = { CPU_TMP_READ8_PC_INC_JRZ_CHK, CPU_TMP_ADD_PC, CPU_GET_INSTRUCTION };
-static uint8_t cpu_jrnc_arr[3] = { CPU_TMP_READ8_PC_INC_JRNC_CHK, CPU_TMP_ADD_PC, CPU_GET_INSTRUCTION };
-static uint8_t cpu_jrc_arr[3] = { CPU_TMP_READ8_PC_INC_JRC_CHK, CPU_TMP_ADD_PC, CPU_GET_INSTRUCTION };
+static const uint8_t cpu_jr_arr[3] = { CPU_TMP_READ8_PC_INC, CPU_TMP_ADD_PC, CPU_GET_INSTRUCTION };
+static const uint8_t cpu_jrnz_arr[3] = { CPU_TMP_READ8_PC_INC_JRNZ_CHK, CPU_TMP_ADD_PC, CPU_GET_INSTRUCTION };
+static const uint8_t cpu_jrz_arr[3] = { CPU_TMP_READ8_PC_INC_JRZ_CHK, CPU_TMP_ADD_PC, CPU_GET_INSTRUCTION };
+static const uint8_t cpu_jrnc_arr[3] = { CPU_TMP_READ8_PC_INC_JRNC_CHK, CPU_TMP_ADD_PC, CPU_GET_INSTRUCTION };
+static const uint8_t cpu_jrc_arr[3] = { CPU_TMP_READ8_PC_INC_JRC_CHK, CPU_TMP_ADD_PC, CPU_GET_INSTRUCTION };
 
-static uint8_t cpu_di_arr[1] = { CPU_DI_GET_INSTRUCTION };
-static uint8_t cpu_ei_arr[1] = { CPU_GET_INSTRUCTION_EI };
-static uint8_t cpu_scf_arr[1] = { CPU_SCF_GET_INSTRUCTION };
-static uint8_t cpu_ccf_arr[1] = { CPU_CCF_GET_INSTRUCTION };
+static const uint8_t cpu_di_arr[1] = { CPU_DI_GET_INSTRUCTION };
+static const uint8_t cpu_ei_arr[1] = { CPU_GET_INSTRUCTION_EI };
+static const uint8_t cpu_scf_arr[1] = { CPU_SCF_GET_INSTRUCTION };
+static const uint8_t cpu_ccf_arr[1] = { CPU_CCF_GET_INSTRUCTION };
 
-static uint8_t cpu_add_bc_arr[2] = { CPU_BC_ACTION_ADD, CPU_GET_INSTRUCTION };
-static uint8_t cpu_add_de_arr[2] = { CPU_DE_ACTION_ADD, CPU_GET_INSTRUCTION };
-static uint8_t cpu_add_hl_arr[2] = { CPU_HL_ACTION_ADD, CPU_GET_INSTRUCTION };
-static uint8_t cpu_add_sp_arr[2] = { CPU_SP_ACTION_ADD, CPU_GET_INSTRUCTION };
-static uint8_t cpu_ld_hl_add_sp_imm_arr[3] = { CPU_TMP_READ8_PC_INC, CPU_HL_ADD_SPECIAL, CPU_GET_INSTRUCTION };
-static uint8_t cpu_add_sp_imm_arr[4] = { CPU_TMP_READ8_PC_INC, CPU_SP_ADD_SPECIAL, CPU_DELAY_CYCLE, CPU_GET_INSTRUCTION };
+static const uint8_t cpu_add_bc_arr[2] = { CPU_BC_ACTION_ADD, CPU_GET_INSTRUCTION };
+static const uint8_t cpu_add_de_arr[2] = { CPU_DE_ACTION_ADD, CPU_GET_INSTRUCTION };
+static const uint8_t cpu_add_hl_arr[2] = { CPU_HL_ACTION_ADD, CPU_GET_INSTRUCTION };
+static const uint8_t cpu_add_sp_arr[2] = { CPU_SP_ACTION_ADD, CPU_GET_INSTRUCTION };
+static const uint8_t cpu_ld_hl_add_sp_imm_arr[3] = { CPU_TMP_READ8_PC_INC, CPU_HL_ADD_SPECIAL, CPU_GET_INSTRUCTION };
+static const uint8_t cpu_add_sp_imm_arr[4] = { CPU_TMP_READ8_PC_INC, CPU_SP_ADD_SPECIAL, CPU_DELAY_CYCLE, CPU_GET_INSTRUCTION };
 
-static uint8_t cpu_start_arr[1] = { CPU_GET_INSTRUCTION };
-static uint8_t *cpu_action_arr = cpu_start_arr;
-static uint8_t cpu_arr_pos = 0;
+static inline void cpuSetNopArr()
+{
+	cpu_action_arr = cpu_nop_arr;
+	cpu_arr_pos = 0;
+}
 
-static uint8_t *cpu_instr_arr[256] = {
+static const uint8_t *cpu_instr_arr[256] = {
 	cpu_nop_arr, cpu_ld_bc_arr, cpu_st_a_arr, cpu_imm_delay_arr, //0x00-0x03
 	cpu_imm_b_arr, cpu_imm_b_arr, cpu_ld_b_arr, cpu_imm_a_arr, //0x04-0x07
 	cpu_st16_sp_arr, cpu_add_bc_arr, cpu_imm_bc_arr, cpu_imm_delay_arr, //0x08-0x0B
@@ -953,7 +973,7 @@ typedef void (*cpu_action_t)(uint8_t*);
 static cpu_action_t cpu_actions_arr[256];
 static cpu_action_t cpu_action_func;
 
-void cpuSetupActionArr()
+static void cpuSetupActionArr()
 {
 	cpu_actions_arr[0x00] = cpuNoAction; cpu_actions_arr[0x01] = cpuNoAction; cpu_actions_arr[0x02] = cpuSTbc; cpu_actions_arr[0x03] = cpuBcInc;
 	cpu_actions_arr[0x04] = cpuInc; cpu_actions_arr[0x05] = cpuDec; cpu_actions_arr[0x06] = cpuNoAction; cpu_actions_arr[0x07] = cpuRLCA;
@@ -1085,7 +1105,7 @@ bool cpuHandleIrqUpdates()
 	}
 	return false;
 }
-static uint8_t curInstr;
+
 void cpuGetInstruction()
 {
 	if(cpuHandleIrqUpdates())
@@ -1102,8 +1122,7 @@ void cpuGetInstruction()
 			//if(!gbsInitRet)
 			//	printf("Init return\n");
 			gbsInitRet = true; //allow play call
-			cpu_action_arr = cpu_nop_arr;
-			cpu_arr_pos = 0;
+			cpuSetNopArr();
 			return;
 		} //play return
 		else if(pc == 0x8765)
@@ -1111,15 +1130,13 @@ void cpuGetInstruction()
 			//if(!gbsPlayRet)
 			//	printf("Play return\n");
 			gbsPlayRet = true; //allow next play call
-			cpu_action_arr = cpu_nop_arr;
-			cpu_arr_pos = 0;
+			cpuSetNopArr();
 			return;
 		}
 	}
 	if(cpuHaltLoop)
 	{
-		cpu_action_arr = cpu_nop_arr;
-		cpu_arr_pos = 0;
+		cpuSetNopArr();
 		//happens when IME=0
 		if(!irqEnable && memGetCurIrqList())
 			cpuHaltLoop = false;
@@ -1132,19 +1149,18 @@ void cpuGetInstruction()
 		if(cpuInAny && !cpuPrevInAny)
 			cpuStopLoop = false;
 		cpuPrevInAny = cpuInAny;
-		cpu_action_arr = cpu_nop_arr;
-		cpu_arr_pos = 0;
+		cpuSetNopArr();
 		return;
 	}
 	curInstr = memGet8(pc);
 	cpu_action_arr = cpu_instr_arr[curInstr];
+	cpu_arr_pos = 0;
 	if(cpu_action_arr == NULL)
 	{
 		printf("CPU Error: Unsupported Instruction at %04x:%02x!\n", pc-1,curInstr);
-		cpu_action_arr = cpu_nop_arr;
+		cpuSetNopArr();
 		cpuSetStopLoop();
 	}
-	cpu_arr_pos = 0;
 	cpu_action_func = cpu_actions_arr[curInstr];
 
 	//if(pc==0xABC || pc == 0xAC1 || pc == 0x5E0E || pc == 0x5E0F)
@@ -1154,8 +1170,6 @@ void cpuGetInstruction()
 	cpuHaltBug = false;
 }
 
-static bool cpu_oam_dma_started = false;
-static uint8_t cpu_oam_dma_pos = 0;
 static void cpuHandleOAMDMA()
 {
 	if(cpu_oam_dma)
@@ -1184,7 +1198,6 @@ static void cpuHandleOAMDMA()
 }
 
 /* Main CPU Interpreter */
-bool cpuDmaHalt = false;
 
 void cpuCycle()
 {
@@ -1233,7 +1246,7 @@ void cpuCycle()
 					break;
 				default: //should never happen
 					printf("CPU Error: Unknown sub %02x\n", sub_instr);
-					cpu_action_arr = cpu_nop_arr;
+					cpuSetNopArr();
 					cpuSetStopLoop();
 					break;
 			}
@@ -1703,8 +1716,7 @@ void cpuPlayGBS()
 	a = 0, b = 0, c = 0, d = 0, e = 0;//, h = 0, l = 0;
 	//jump to play
 	pc = gbsPlayAddr;
-	cpu_action_arr = cpu_nop_arr;
-	cpu_arr_pos = 0;
+	cpuSetNopArr();
 	//printf("Playback Start at %04x\n", pc);
 }
 extern uint8_t gbsTMA, gbsTAC;
@@ -1731,7 +1743,6 @@ void cpuLoadGBS(uint8_t song)
 	a = song;
 	pc = gbsInitAddr;
 	//start getting instructions
-	cpu_action_arr = cpu_nop_arr;
-	cpu_arr_pos = 0;
+	cpuSetNopArr();
 	//printf("Init Start at %04x\n", pc);
 }

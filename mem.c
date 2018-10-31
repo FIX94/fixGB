@@ -35,6 +35,7 @@ static uint8_t timerReg;
 static uint8_t timerRegVal;
 static uint8_t timerResetVal;
 static uint16_t timerRegBit;
+static bool timerPrevTicked;
 static uint8_t sioTimerRegClock;
 static uint8_t sioTimerRegTimer;
 static uint8_t sioBitsTransfered;
@@ -48,15 +49,26 @@ static bool cgbDmaHBlankMode;
 static bool cgbBootromEnabled = false;
 static bool timerRegEnable = false;
 static bool sioTimerRegEnable = false;
-static bool emuSaveEnabled = false;
 
 //from main.c
 extern bool gbCgbGame;
 extern bool gbCgbMode;
 extern bool gbCgbBootrom;
 extern uint8_t *emuGBROM;
+extern bool gbIsMulticart;
 
 //from mbc.c
+//multicart regs
+extern uint16_t tBank0;
+extern uint16_t tBank1;
+extern uint16_t oBank;
+extern uint16_t iBank;
+extern uint16_t oBankAnd;
+extern uint16_t iBankAnd;
+extern uint8_t mcState;
+extern bool mcLocked;
+//normal regs
+extern uint8_t rtcReg;
 extern uint16_t cBank;
 extern uint16_t extBank;
 extern uint16_t bankMask;
@@ -72,16 +84,21 @@ extern bool cpuDoStopSwitch;
 extern uint8_t ppuCgbBank;
 
 //from mbc.c
+extern bool RamIOAllowed;
 extern bool extMemEnabled;
 extern bool bankUsed;
 extern bool extSelect;
 extern bool rtcUsed;
+extern bool rtcEnabled;
+extern uint8_t lastRTCval;
 
 static get8FuncT memGet8ptr[0x10000];
 static set8FuncT memSet8ptr[0x10000];
 static uint8_t memCGBBootrom[0x900];
 static uint8_t memGetROMBank8(uint16_t addr);
 static uint8_t memGetROMNoBank8(uint16_t addr);
+static uint8_t memGetROM0Multicart8(uint16_t addr);
+static uint8_t memGetROM1Multicart8(uint16_t addr);
 static uint8_t memGetBootROMNoBank8(uint16_t addr);
 static uint8_t memGetRAMBank8(uint16_t addr);
 static uint8_t memGetRAMNoBank8(uint16_t addr);
@@ -213,24 +230,17 @@ static void memSetExtVal()
 	}
 }
 
-static uint8_t curGBS = 0;
+static uint8_t curGBS;
 extern uint8_t gbsTracksTotal;
 extern uint32_t gbsRomSize;
 bool memInit(bool romcheck, bool gbs)
 {
 	if(romcheck)
 	{
-		cBank = 1;
-		bankMask = 1;
-		extBank = 0;
-		extMask = 0;
-		extAddrMask = 0;
-		extTotalSize = 0;
-		bankUsed = false;
-		extMemEnabled = false;
-		rtcUsed = false;
+		mbcResetRegs();
 		if(gbs)
 		{
+			curGBS = 0;
 			bankUsed = true;
 			//Get ROM Size multiple
 			if(gbsRomSize <= 0x8000)
@@ -422,6 +432,7 @@ bool memInit(bool romcheck, bool gbs)
 	timerRegVal = 0;
 	timerResetVal = 0;
 	timerRegBit = (1<<9); //Freq 0
+	timerPrevTicked = false;
 	sioTimerRegClock = 1;
 	sioTimerRegTimer = 32;
 	sioBitsTransfered = 0;
@@ -438,6 +449,11 @@ bool memInit(bool romcheck, bool gbs)
 	return true;
 }
 
+void memDeinit()
+{
+	cgbBootromEnabled = false;
+}
+
 void memInitGetSetPointers()
 {
 	//init memGet8 and memSet8 arrays
@@ -446,12 +462,12 @@ void memInitGetSetPointers()
 	{
 		if(addr < 0x4000) //0x0000 - 0x3FFF = Cartridge ROM
 		{
-			memGet8ptr[addr] = cgbBootromEnabled?memGetBootROMNoBank8:memGetROMNoBank8;
+			memGet8ptr[addr] = cgbBootromEnabled?memGetBootROMNoBank8:(gbIsMulticart?memGetROM0Multicart8:memGetROMNoBank8);
 			memSet8ptr[addr] = mbcSet8;
 		}
 		else if(addr < 0x8000) //0x4000 - 0x7FFF = Cartridge ROM (possibly banked)
 		{
-			memGet8ptr[addr] = bankUsed?memGetROMBank8:memGetROMNoBank8;
+			memGet8ptr[addr] = gbIsMulticart?memGetROM1Multicart8:(bankUsed?memGetROMBank8:memGetROMNoBank8);
 			memSet8ptr[addr] = mbcSet8;
 		}
 		else if(addr < 0xA000) //0x8000 - 0x9FFF = PPU VRAM
@@ -459,7 +475,7 @@ void memInitGetSetPointers()
 			memGet8ptr[addr] = gbCgbMode?ppuGetVRAMBank8:ppuGetVRAMNoBank8;
 			memSet8ptr[addr] = gbCgbMode?ppuSetVRAMBank8:ppuSetVRAMNoBank8;
 		}
-		else if(addr < 0xC000) //0xA000 - 0xBFFF = Cardridge RAM
+		else if(addr < 0xC000) //0xA000 - 0xBFFF = Cartridge RAM
 		{
 			memGet8ptr[addr] = mbcGetRAM8;
 			memSet8ptr[addr] = mbcSetRAM8;
@@ -625,6 +641,16 @@ static uint8_t memGetROMBank8(uint16_t addr)
 static uint8_t memGetROMNoBank8(uint16_t addr)
 {
 	return emuGBROM[addr&0x7FFF];
+}
+
+static uint8_t memGetROM0Multicart8(uint16_t addr)
+{
+	return emuGBROM[(tBank0<<14)|(addr&0x3FFF)];
+}
+
+static uint8_t memGetROM1Multicart8(uint16_t addr)
+{
+	return emuGBROM[(tBank1<<14)|(addr&0x3FFF)];
 }
 
 static uint8_t memGetBootROMNoBank8(uint16_t addr)
@@ -871,14 +897,14 @@ void memDumpMainMem()
 	ppuDumpMem();
 	#endif
 }
-
-#ifndef __LIBRETRO__
+extern bool emuSaveEnabled;
 extern char emuSaveName[1024];
 void memLoadSave()
 {
 	if(emuSaveName[0] && (extTotalSize || rtcUsed))
 	{
 		emuSaveEnabled = true;
+#ifndef __LIBRETRO__
 		FILE *save = fopen(emuSaveName, "rb");
 		if(save)
 		{
@@ -895,9 +921,11 @@ void memLoadSave()
 			printf("Mem: Done reading %s\n", emuSaveName);
 			fclose(save);
 		}
+#endif
 	}
 }
 
+#ifndef __LIBRETRO__
 void memSaveGame()
 {
 	if(emuSaveName[0] && ((emuSaveEnabled && extTotalSize) || rtcUsed))
@@ -919,7 +947,6 @@ void memSaveGame()
 extern bool gbEmuGBSPlayback;
 extern bool gbsTimerMode;
 extern uint8_t inValReads[8];
-static bool timerPrevTicked = false;
 //clocked at 262144 Hz (or 2x that in CGB Mode)
 void memClockTimers()
 {

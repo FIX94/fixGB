@@ -14,26 +14,37 @@
 #include "mbc.h"
 
 uint8_t Ext_Mem[0x20000];
-static bool RamIOAllowed = false;
 set8FuncT mbcSet8;
 set8FuncT mbcSetRAM8;
 get8FuncT mbcGetRAM8;
 
-static uint8_t rtcReg = 0;
-uint16_t cBank = 1;
-uint16_t extBank = 0;
-uint16_t bankMask = 0;
-uint16_t extMask = 0;
-uint16_t extAddrMask = 0;
-size_t extTotalSize = 0;
+//multicart regs
+uint16_t tBank0;
+uint16_t tBank1;
+uint16_t oBank;
+uint16_t iBank;
+uint16_t oBankAnd;
+uint16_t iBankAnd;
+uint8_t mcState;
+bool mcLocked;
 
-bool extMemEnabled = false;
-bool bankUsed = false;
-bool extSelect = false;
-bool rtcUsed = false;
-bool rtcEnabled = false;
+//normal regs
+uint8_t rtcReg;
+uint16_t cBank;
+uint16_t extBank;
+uint16_t bankMask;
+uint16_t extMask;
+uint16_t extAddrMask;
+size_t extTotalSize;
 
-static uint8_t lastRTCval = 0;
+bool RamIOAllowed;
+bool extMemEnabled;
+bool bankUsed;
+bool extSelect;
+bool rtcUsed;
+bool rtcEnabled;
+
+uint8_t lastRTCval;
 
 //used in for example VBA
 static struct RTCSave_t {
@@ -52,6 +63,7 @@ static struct RTCSave_t {
 
 static void noSet8(uint16_t addr, uint8_t val);
 static void mbc1Set8(uint16_t addr, uint8_t val);
+static void mbc1mcSet8(uint16_t addr, uint8_t val);
 static void mbc2Set8(uint16_t addr, uint8_t val);
 static void mbc3Set8(uint16_t addr, uint8_t val);
 static void mbc5Set8(uint16_t addr, uint8_t val);
@@ -69,9 +81,12 @@ static void mbc2SetExtRAM8(uint16_t addr, uint8_t val);
 static uint8_t mbcGetNoExtRAM8(uint16_t addr);
 static void mbcSetNoExtRAM8(uint16_t addr, uint8_t val);
 
+extern bool gbIsMulticart;
 void mbcInit(uint8_t type)
 {
-	if(type == MBC_TYPE_1)
+	if(gbIsMulticart)
+		mbcSet8 = mbc1mcSet8;
+	else if(type == MBC_TYPE_1)
 		mbcSet8 = mbc1Set8;
 	else if(type == MBC_TYPE_2)
 		mbcSet8 = mbc2Set8;
@@ -127,6 +142,30 @@ void mbcInit(uint8_t type)
 	mbcExtRAMInit(type);
 }
 
+void mbcResetRegs()
+{
+	//multicart regs
+	tBank0 = 0, tBank1 = 1;
+	oBank = 0, iBank = 1;
+	oBankAnd = 0x20, iBankAnd = 0x3F;
+	mcState = 0, mcLocked = false;
+	//normal regs
+	rtcReg = 0;
+	cBank = 1;
+	bankMask = 1;
+	extBank = 0;
+	extMask = 0;
+	extAddrMask = 0;
+	extTotalSize = 0;
+	RamIOAllowed = false;
+	extMemEnabled = false;
+	bankUsed = false;
+	extSelect = false;
+	rtcUsed = false;
+	rtcEnabled = false;
+	lastRTCval = 0;
+}
+
 static void noSet8(uint16_t addr, uint8_t val)
 {
 	(void)addr;
@@ -174,6 +213,35 @@ static void mbc1Set8(uint16_t addr, uint8_t val)
 	}
 	else if(addr >= 0x6000 && addr < 0x8000)
 		extSelect = !!val;
+}
+
+static void mbc1mcSet8(uint16_t addr, uint8_t val)
+{
+	if(addr >= 0x2000 && addr < 0x4000)
+	{
+		iBank = val&0x3F;
+		if(iBank == 0)
+			iBank |= 1;
+		tBank1 = ((oBank&oBankAnd)<<1)+(iBank&iBankAnd);
+	}
+	else if(addr >= 0x6000 && addr < 0x8000 && !mcLocked)
+	{
+		if(mcState == 0)
+		{
+			oBank = val&0x3F;
+			tBank0 = ((oBank&oBankAnd)<<1);
+			tBank1 = ((oBank&oBankAnd)<<1)+(iBank&iBankAnd);
+		}
+		else
+		{
+			iBankAnd=(~(val<<1))&0x3F;
+			oBankAnd=0x20|(val&0x1F);
+			tBank0 = ((oBank&oBankAnd)<<1);
+			tBank1 = ((oBank&oBankAnd)<<1)+(iBank&iBankAnd);
+			mcLocked = !!(val&0x20);
+		}
+		mcState^=1;
+	}
 }
 
 static void mbc2Set8(uint16_t addr, uint8_t val)

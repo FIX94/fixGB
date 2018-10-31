@@ -53,10 +53,10 @@ static uint8_t p1LengthCtr, p2LengthCtr, noiseLengthCtr;
 static uint8_t wavLinearCtr;
 static uint16_t wavLengthCtr;
 static uint8_t wavVolShift;
-static uint16_t modeCurCtr = 0;
+static uint16_t modeCurCtr;
+static uint8_t modePos;
 static uint16_t p1freqCtr, p2freqCtr, wavFreqCtr, noiseFreqCtr;
 static uint8_t p1Cycle, p2Cycle, wavCycle;
-static uint8_t modePos = 0;
 static bool p1haltloop, p2haltloop, wavhaltloop, noisehaltloop;
 static bool p1dacenable, p2dacenable, wavdacenable, noisedacenable;
 static bool p1enable, p2enable, wavenable, noiseenable;
@@ -118,16 +118,16 @@ void apuInitBufs()
 	apuFrequency = 262144;
 	double dt = 1.0/((double)apuFrequency);
 
-	//LP at 22kHz
-	double rc = 1.0/(M_2_PI * 22000.0);
+	//LP at 20kHz
+	double rc = 1.0/(M_2_PI * 20000.0);
 #if AUDIO_FLOAT
 	lpVal = dt / (rc + dt);
 #else
 	//convert to 32bit int for calcs later
 	lpVal = (int32_t)((dt / (rc + dt))*32768.0);
 #endif
-	//HP at 40Hz
-	rc = 1.0/(M_2_PI * 40.0);
+	//HP at 20Hz for GB/GBA (150Hz for GBC)
+	rc = 1.0/(M_2_PI * 20.0);
 #if AUDIO_FLOAT
 	hpVal = rc / (rc + dt);
 #else
@@ -154,6 +154,16 @@ void apuDeinitBufs()
 	apuOutBuf = NULL;
 }
 
+#if AUDIO_FLOAT
+static float lastHPOutLeft, lastHPOutRight, lastLPOutLeft, lastLPOutRight;
+#else
+static int32_t lastHPOutLeft, lastHPOutRight, lastLPOutLeft, lastLPOutRight;
+#endif
+//used externally
+uint8_t curP1Out, curP2Out, curWavOut, curNoiseOut;
+
+extern bool emuSkipVsync, emuSkipFrame;
+
 extern bool gbCgbMode;
 extern bool gbCgbBootrom;
 void apuInit()
@@ -166,8 +176,11 @@ void apuInit()
 	memset(apuOutBuf, 0, apuBufSizeBytes);
 	curBufPos = 0;
 
+	modeCurCtr = 0;
+	modePos = 0;
+
 	freq1 = 0; freq2 = 0; wavFreq = 0; noiseFreq = 0;
-	noiseShiftReg = 1;
+	noiseShiftReg = 0;
 	p1LengthCtr = 0; p2LengthCtr = 0;
 	noiseLengthCtr = 0;	wavLengthCtr = 0;
 	wavLinearCtr = 0;
@@ -197,18 +210,10 @@ void apuInit()
 		APU_IO_Reg[0x24] = 0x77;
 		APU_IO_Reg[0x25] = 0xF3;
 	}
-}
 
-#if AUDIO_FLOAT
-static float lastHPOutLeft = 0, lastHPOutRight = 0, lastLPOutLeft = 0, lastLPOutRight = 0;
-#else
-static int32_t lastHPOutLeft = 0, lastHPOutRight = 0, lastLPOutLeft = 0, lastLPOutRight = 0;
-#endif
-static uint8_t lastP1OutLeft = 0, lastP2OutLeft = 0, lastWavOutLeft = 0, lastNoiseOutLeft = 0;
-static uint8_t lastP1OutRight = 0, lastP2OutRight = 0, lastWavOutRight = 0, lastNoiseOutRight = 0;
-extern bool emuSkipVsync, emuSkipFrame;
-//used externally
-uint8_t curP1Out = 0, curP2Out = 0, curWavOut = 0, curNoiseOut = 0;
+	lastHPOutLeft = 0, lastHPOutRight = 0, lastLPOutLeft = 0, lastLPOutRight = 0;
+	curP1Out = 0, curP2Out = 0, curWavOut = 0, curNoiseOut = 0;
+}
 
 bool apuCycle()
 {
@@ -238,108 +243,100 @@ bool apuCycle()
 #endif
 		curBufPos = 0;
 	}
-	uint8_t p1OutLeft = lastP1OutLeft, p2OutLeft = lastP2OutLeft, 
-		wavOutLeft = lastWavOutLeft, noiseOutLeft = lastNoiseOutLeft;
-	uint8_t p1OutRight = lastP1OutRight, p2OutRight = lastP2OutRight, 
-		wavOutRight = lastWavOutRight, noiseOutRight = lastNoiseOutRight;
-	uint8_t apuMasterVolLeft = ((APU_IO_Reg[0x24]>>4)&7), apuMasterVolRight = (APU_IO_Reg[0x24]&7);
+	int8_t p1Out = 0, p2Out = 0, noiseOut = 0, wavOut = 0;
+	int8_t p1OutLeft = 0, p2OutLeft = 0, 
+		wavOutLeft = 0, noiseOutLeft = 0;
+	int8_t p1OutRight = 0, p2OutRight = 0, 
+		wavOutRight = 0, noiseOutRight = 0;
+	int8_t apuMasterVolLeft = ((APU_IO_Reg[0x24]>>4)&7), apuMasterVolRight = (APU_IO_Reg[0x24]&7);
 	if(p1enable && p1dacenable)
 	{
-		if(p1seq[p1Cycle] && freq1 > 0 && freq1 < 0x7FF)
-		{
+		if(p1seq[p1Cycle])
 			curP1Out = p1Env.curVol;
-			if(APU_IO_Reg[0x25] & P1_ENABLE_LEFT)
-				lastP1OutLeft = p1OutLeft = curP1Out;
-			if(APU_IO_Reg[0x25] & P1_ENABLE_RIGHT)
-				lastP1OutRight = p1OutRight = curP1Out;
-		}
 		else
-		{
 			curP1Out = 0;
-			if(APU_IO_Reg[0x25] & P1_ENABLE_LEFT)
-				p1OutLeft = 0;
-			if(APU_IO_Reg[0x25] & P1_ENABLE_RIGHT)
-				p1OutRight = 0;
+		//actually audible output
+		if(freq1 > 0 && freq1 < 0x7FF)
+		{
+			//GB/GBC Behavior
+			//p1Out = (curP1Out<<1)-15;
+			//GBA Behavior
+			p1Out = (curP1Out<<1)-p1Env.curVol;
 		}
 	}
 	else
 		curP1Out = 0;
+	if(APU_IO_Reg[0x25] & P1_ENABLE_LEFT)
+		p1OutLeft = p1Out;
+	if(APU_IO_Reg[0x25] & P1_ENABLE_RIGHT)
+		p1OutRight = p1Out;
 	if(p2enable && p2dacenable)
 	{
-		if(p2seq[p2Cycle] && freq2 > 0 && freq2 < 0x7FF)
-		{
+		if(p2seq[p2Cycle])
 			curP2Out = p2Env.curVol;
-			if(APU_IO_Reg[0x25] & P2_ENABLE_LEFT)
-				lastP2OutLeft = p2OutLeft = curP2Out;
-			if(APU_IO_Reg[0x25] & P2_ENABLE_RIGHT)
-				lastP2OutRight = p2OutRight = curP2Out;
-		}
 		else
-		{
 			curP2Out = 0;
-			if(APU_IO_Reg[0x25] & P2_ENABLE_LEFT)
-				p2OutLeft = 0;
-			if(APU_IO_Reg[0x25] & P2_ENABLE_RIGHT)
-				p2OutRight = 0;
+		//actually audible output
+		if(freq2 > 0 && freq2 < 0x7FF)
+		{
+			//GB/GBC Behavior
+			//p2Out = (curP2Out<<1)-15;
+			//GBA Behavior
+			p2Out = (curP2Out<<1)-p2Env.curVol;
 		}
 	}
 	else
 		curP2Out = 0;
+	if(APU_IO_Reg[0x25] & P2_ENABLE_LEFT)
+		p2OutLeft = p2Out;
+	if(APU_IO_Reg[0x25] & P2_ENABLE_RIGHT)
+		p2OutRight = p2Out;
 	if(wavenable && wavdacenable)
 	{
-		uint8_t v = APU_IO_Reg[0x30+(wavCycle>>1)];
+		curWavOut = APU_IO_Reg[0x30+(wavCycle>>1)];
 		if((wavCycle&1)==0)
-			v >>= 4; 
+			curWavOut >>= 4; 
 		else
-			v &= 0xF;
-		v>>=wavVolShift;
-		if(v && ((wavFreq > 0 && wavFreq < 0x7FF) || wavEqual))
-		{
-			curWavOut = v;
-			if(APU_IO_Reg[0x25] & WAV_ENABLE_LEFT)
-				lastWavOutLeft = wavOutLeft = curWavOut;
-			if(APU_IO_Reg[0x25] & WAV_ENABLE_RIGHT)
-				lastWavOutRight = wavOutRight = curWavOut;
-		}
-		else
-		{
-			curWavOut = 0;
-			if(APU_IO_Reg[0x25] & WAV_ENABLE_LEFT)
-				wavOutLeft = 0;
-			if(APU_IO_Reg[0x25] & WAV_ENABLE_RIGHT)
-				wavOutRight = 0;
-		}
+			curWavOut &= 0xF;
+		curWavOut >>= wavVolShift;
+		//actually audible output
+		if((wavFreq > 0 && wavFreq < 0x7FF) || wavEqual)
+			wavOut = (curWavOut<<1)-15;
 	}
 	else
 		curWavOut = 0;
+	if(APU_IO_Reg[0x25] & WAV_ENABLE_LEFT)
+		wavOutLeft = wavOut;
+	if(APU_IO_Reg[0x25] & WAV_ENABLE_RIGHT)
+		wavOutRight = wavOut;
 	if(noiseenable && noisedacenable)
 	{
-		if((noiseShiftReg&1) == 0 && noiseFreq > 0)
-		{
+		if((noiseShiftReg&1) == 0)
 			curNoiseOut = noiseEnv.curVol;
-			if(APU_IO_Reg[0x25] & NOISE_ENABLE_LEFT)
-				lastNoiseOutLeft = noiseOutLeft = curNoiseOut;
-			if(APU_IO_Reg[0x25] & NOISE_ENABLE_RIGHT)
-				lastNoiseOutRight = noiseOutRight = curNoiseOut;
-		}
 		else
-		{
 			curNoiseOut = 0;
-			if(APU_IO_Reg[0x25] & NOISE_ENABLE_LEFT)
-				noiseOutLeft = 0;
-			if(APU_IO_Reg[0x25] & NOISE_ENABLE_RIGHT)
-				noiseOutRight = 0;
+		//actually audible output
+		if(noiseFreq > 0)
+		{
+			//GB/GBC Behavior
+			//noiseOut = (curNoiseOut<<1)-15;
+			//GBA Behavior
+			noiseOut = (curNoiseOut<<1)-noiseEnv.curVol;
 		}
 	}
 	else
 		curNoiseOut = 0;
+	if(APU_IO_Reg[0x25] & NOISE_ENABLE_LEFT)
+		noiseOutLeft = noiseOut;
+	if(APU_IO_Reg[0x25] & NOISE_ENABLE_RIGHT)
+		noiseOutRight = noiseOut;
 #if AUDIO_FLOAT
 	//gen output Left
-	float curInLeft = ((float)(p1OutLeft + p2OutLeft + wavOutLeft + noiseOutLeft))*volLevel[apuMasterVolLeft]/32.f;
+	float curInLeft = ((float)(p1OutLeft + p2OutLeft + wavOutLeft + noiseOutLeft))*volLevel[apuMasterVolLeft]/85.333333f;
 	float curLPOutLeft = lastLPOutLeft+(lpVal*(curInLeft-lastLPOutLeft));
 	float curHPOutLeft = hpVal*(lastHPOutLeft+lastLPOutLeft-curLPOutLeft);
 	//gen output Right
-	float curInRight = ((float)(p1OutRight + p2OutRight + wavOutRight + noiseOutRight))*volLevel[apuMasterVolRight]/32.f;
+	float curInRight = ((float)(p1OutRight + p2OutRight + wavOutRight + noiseOutRight))*volLevel[apuMasterVolRight]/85.333333f;
 	float curLPOutRight = lastLPOutRight+(lpVal*(curInRight-lastLPOutRight));
 	float curHPOutRight = hpVal*(lastHPOutRight+lastLPOutRight-curLPOutRight);
 	//set output Left
@@ -355,7 +352,7 @@ bool apuCycle()
 #else
 	int32_t curIn, curOut;
 	//gen output Left
-	curIn = ((p1OutLeft + p2OutLeft + wavOutLeft + noiseOutLeft))*(apuMasterVolLeft+1)<<7;
+	curIn = (p1OutLeft + p2OutLeft + wavOutLeft + noiseOutLeft)*(apuMasterVolLeft+1)*48;
 	curOut = lastLPOutLeft+((lpVal*(curIn-lastLPOutLeft))>>15); //Set Left Lowpass Output
 	curIn = (lastHPOutLeft+lastLPOutLeft-curOut); //Set Left Highpass Input
 	curIn += (curIn>>31)&1; //Add Sign Bit for proper Downshift later
@@ -365,7 +362,7 @@ bool apuCycle()
 	//Save Clipped Left Highpass Output
 	apuOutBuf[curBufPos++] = ((soundEnabled)?((curOut > 32767)?(32767):((curOut < -32768)?(-32768):curOut)):0);
 	//gen output Right
-	curIn = ((p1OutRight + p2OutRight + wavOutRight + noiseOutRight))*(apuMasterVolRight+1)<<7;
+	curIn = (p1OutRight + p2OutRight + wavOutRight + noiseOutRight)*(apuMasterVolRight+1)*48;
 	curOut = lastLPOutRight+((lpVal*(curIn-lastLPOutRight))>>15); //Set Right Lowpass Output
 	curIn = (lastHPOutRight+lastLPOutRight-curOut); //Set Right Highpass Input
 	curIn += (curIn>>31)&1; //Add Sign Bit for proper Downshift later
@@ -567,10 +564,9 @@ void apuClockTimers()
 	if(noiseFreqCtr == 0)
 	{
 		noiseFreqCtr = noiseFreq;
-		uint8_t cmpBit = noiseMode1 ? (noiseShiftReg>>6)&1 : (noiseShiftReg>>1)&1;
-		uint8_t cmpRes = (noiseShiftReg&1)^cmpBit;
+		uint8_t cmpRes = (noiseShiftReg&1)^((noiseShiftReg>>1)&1);
 		noiseShiftReg >>= 1;
-		noiseShiftReg |= cmpRes<<14;
+		noiseShiftReg |= cmpRes << (noiseMode1 ? 6 : 14);
 	}
 	if(noiseFreqCtr)
 		noiseFreqCtr--;
@@ -657,8 +653,6 @@ void apuSetReg8(uint16_t addr, uint8_t val)
 				p1Env.curVol++;
 				p1Env.curVol &= 0xF;
 			}
-			else //Normal behaviour
-				p1Env.curVol = p1Env.vol;
 			p1dacenable = (p1Env.modeadd || p1Env.vol);
 			if(!p1dacenable)
 				p1enable = false;
@@ -731,8 +725,6 @@ void apuSetReg8(uint16_t addr, uint8_t val)
 				p2Env.curVol++;
 				p2Env.curVol &= 0xF;
 			}
-			else //Normal behaviour
-				p2Env.curVol = p2Env.vol;
 			p2dacenable = (p2Env.modeadd || p2Env.vol);
 			if(!p2dacenable)
 				p2enable = false;
@@ -855,8 +847,6 @@ void apuSetReg8(uint16_t addr, uint8_t val)
 				noiseEnv.curVol++;
 				noiseEnv.curVol &= 0xF;
 			}
-			else //Normal behaviour
-				noiseEnv.curVol = noiseEnv.vol;
 			noisedacenable = (noiseEnv.modeadd || noiseEnv.vol);
 			if(!noisedacenable)
 				noiseenable = false;
@@ -900,6 +890,8 @@ void apuSetReg8(uint16_t addr, uint8_t val)
 				noiseEnv.curVol = noiseEnv.vol;
 				//period 0 is actually period 8!
 				noiseEnv.divider = (noiseEnv.period-1)&7;
+				//trigger sets all shift reg bits
+				noiseShiftReg = 0x7FFF;
 			}
 			break;
 		default:

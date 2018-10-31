@@ -12,6 +12,7 @@ typedef uint8_t (*get8FuncT)(uint16_t);
 typedef void (*set8FuncT)(uint16_t, uint8_t val);
 
 bool memInit(bool romcheck, bool gbs);
+void memDeinit();
 void memInitGetSetPointers();
 bool memInitCGBBootrom();
 uint8_t memGet8(uint16_t addr);

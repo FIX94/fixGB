@@ -32,7 +32,7 @@
 #define DEBUG_KEY 0
 #define DEBUG_LOAD_INFO 1
 
-const char *VERSION_STRING = "fixGB Alpha v0.8.1";
+const char *VERSION_STRING = "fixGB Alpha v0.8.2";
 static char window_title[256];
 static char window_title_pause[256];
 
@@ -49,7 +49,7 @@ enum {
 static void gbEmuFileOpen(const char *name);
 static bool gbEmuFileRead();
 static void gbEmuFileClose();
-
+static void gbEmuResetRegs();
 static void gbEmuDisplayFrame(void);
 void gbEmuMainLoop(void);
 void gbEmuDeinit(void);
@@ -59,30 +59,41 @@ static void gbEmuHandleKeyUp(unsigned char key, int x, int y);
 static void gbEmuHandleSpecialDown(int key, int x, int y);
 static void gbEmuHandleSpecialUp(int key, int x, int y);
 
-static int emuFileType = FTYPE_UNK;
+volatile bool emuRenderFrame;
+
+static int emuFileType;
 static char emuFileName[1024];
 uint8_t *emuGBROM = NULL;
-uint32_t emuGBROMsize = 0;
+uint32_t emuGBROMsize;
 char emuSaveName[1024];
+bool emuSaveEnabled;
 //used externally
 uint32_t textureImage[0x5A00];
-bool gbPause = false;
-bool gbEmuGBSPlayback = false;
-bool gbsTimerMode = false;
-uint16_t gbsLoadAddr = 0;
-uint16_t gbsInitAddr = 0;
-uint16_t gbsPlayAddr = 0;
-uint32_t gbsRomSize = 0;
-uint16_t gbsSP = 0;
-uint8_t gbsTracksTotal = 0, gbsTMA = 0, gbsTAC = 0;
-uint8_t cpuTimer = 3;
-bool gbCgbGame = false;
-bool gbCgbMode = false;
-bool gbCgbBootrom = false;
-bool gbAllowInvVRAM = false;
+bool gbPause;
+bool gbEmuGBSPlayback;
+bool gbsTimerMode;
+uint16_t gbsLoadAddr;
+uint16_t gbsInitAddr;
+uint16_t gbsPlayAddr;
+uint32_t gbsRomSize;
+uint16_t gbsSP;
+uint8_t gbsTracksTotal, gbsTMA, gbsTAC;
+uint8_t cpuTimer;
+bool gbCgbGame;
+bool gbCgbMode;
+bool gbCgbBootrom;
+bool gbAllowInvVRAM;
+bool gbIsMulticart;
 
-static bool inPause = false;
-static bool inResize = false;
+static bool inPause;
+static bool inResize;
+
+//used externally
+bool emuSkipVsync;
+bool emuSkipFrame;
+
+static uint8_t mainClock;
+static uint8_t memClock;
 
 #if WINDOWS_BUILD
 #include <windows.h>
@@ -104,15 +115,28 @@ static DWORD emuMainTotalElapsed = 0;
 #define VISIBLE_DOTS 160
 #define VISIBLE_LINES 144
 
-static uint32_t linesToDraw = VISIBLE_LINES;
+static uint32_t linesToDraw;
 static const uint32_t visibleImg = VISIBLE_DOTS*VISIBLE_LINES*4;
-static uint8_t scaleFactor = 3;
+static uint8_t scaleFactor;
 #ifndef __LIBRETRO__
 static uint32_t mainLoopRuns;
 static uint16_t mainLoopPos;
 #endif
+
+static FILE *gbEmuFilePointer = NULL;
+#if ZIPSUPPORT
+static bool gbEmuFileIsZip;
+static uint8_t *gbEmuZipBuf = NULL;
+static uint32_t gbEmuZipLen;
+static unzFile gbEmuZipObj;
+static unz_file_info gbEmuZipObjInfo;
+#endif
+
 //from input.c
 extern uint8_t inValReads[8];
+//from mbc.c
+extern bool rtcUsed;
+extern size_t extTotalSize;
 
 #ifdef __LIBRETRO__
 int gbEmuLoadGame(const char* filename)
@@ -124,11 +148,7 @@ int main(int argc, char** argv)
 {
 #endif
 	puts(VERSION_STRING);
-	strcpy(window_title, VERSION_STRING);
-	memset(textureImage,0,visibleImg);
-	emuFileType = FTYPE_UNK;
-	memset(emuFileName,0,1024);
-	memset(emuSaveName,0,1024);
+	gbEmuResetRegs();
 	if(argc >= 2)
 		gbEmuFileOpen(argv[1]);
 	if(emuFileType == FTYPE_GB || emuFileType == FTYPE_GBC)
@@ -170,6 +190,8 @@ int main(int argc, char** argv)
 		gbCgbGame = (emuGBROM[0x143] == 0x80 || emuGBROM[0x143] == 0xC0);
 		gbCgbMode = (gbCgbGame || gbCgbBootrom);
 		printf("Main: CGB Regs are %sallowed\n", gbCgbMode?"":"dis");
+		//Quick multicart check
+		gbIsMulticart = (emuGBROMsize == 0x200000 && strcmp((char*)(emuGBROM+0x134), "QBILLION") == 0);
 		if(!memInit(true,false))
 		{
 			free(emuGBROM);
@@ -317,14 +339,59 @@ int main(int argc, char** argv)
 	return EXIT_SUCCESS;
 }
 
-static FILE *gbEmuFilePointer = NULL;
+static void gbEmuResetRegs()
+{
+	strcpy(window_title, VERSION_STRING);
+
+	emuRenderFrame = false;
+	linesToDraw = VISIBLE_LINES;
+	scaleFactor = 3;
+
+	memset(textureImage,0,visibleImg);
+	emuFileType = FTYPE_UNK;
+	memset(emuFileName,0,1024);
+	memset(emuSaveName,0,1024);
+	emuSaveEnabled = false;
+	if(emuGBROM)
+		free(emuGBROM);
+	emuGBROM = NULL;
+	emuGBROMsize = 0;
+
+	gbPause = false;
+	gbEmuGBSPlayback = false;
+	gbsTimerMode = false;
+	gbsLoadAddr = 0, gbsInitAddr = 0;
+	gbsPlayAddr = 0, gbsRomSize = 0;
+	gbsSP = 0;
+	gbsTracksTotal = 0, gbsTMA = 0, gbsTAC = 0;
+	cpuTimer = 3;
+	gbCgbGame = false;
+	gbCgbMode = false;
+	gbCgbBootrom = false;
+	gbAllowInvVRAM = false;
+	gbIsMulticart = false;
+
+	inPause = false;
+	inResize = false;
+
+	emuSkipVsync = false;
+	emuSkipFrame = false;
+
+	mainClock = 0;
+	memClock = 0;
+
+	if(gbEmuFilePointer)
+		fclose(gbEmuFilePointer);
+	gbEmuFilePointer = NULL;
 #if ZIPSUPPORT
-static bool gbEmuFileIsZip = false;
-static uint8_t *gbEmuZipBuf = NULL;
-static uint32_t gbEmuZipLen = 0;
-static unzFile gbEmuZipObj;
-static unz_file_info gbEmuZipObjInfo;
+	gbEmuFileIsZip = false;
+	if(gbEmuZipBuf)
+		free(gbEmuZipBuf);
+	gbEmuZipBuf = NULL;
+	gbEmuZipLen = 0;
 #endif
+}
+
 static int gbEmuGetFileType(const char *name)
 {
 	int nLen = strlen(name);
@@ -487,8 +554,6 @@ static void gbEmuFileClose()
 	gbEmuFilePointer = NULL;
 }
 
-volatile bool emuRenderFrame = false;
-
 void gbEmuDeinit(void)
 {
 	//printf("\n");
@@ -498,16 +563,18 @@ void gbEmuDeinit(void)
 	if(emuGBROM != NULL)
 		free(emuGBROM);
 	emuGBROM = NULL;
+#ifndef __LIBRETRO__
 	memSaveGame();
+#endif
+	emuFileType = FTYPE_UNK;
+	memset(emuFileName,0,1024);
+	memset(emuSaveName,0,1024);
+	extTotalSize = 0;
+	rtcUsed = false;
+	memDeinit();
+	gbIsMulticart = false;
 	//printf("Bye!\n");
 }
-
-//used externally
-bool emuSkipVsync = false;
-bool emuSkipFrame = false;
-
-static uint8_t mainClock = 0;
-static uint8_t memClock = 0;
 
 void gbEmuMainLoop(void)
 {

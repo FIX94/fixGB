@@ -20,6 +20,7 @@ enum {
 };
 
 void mbcInit(uint8_t type);
+void mbcResetRegs();
 size_t mbcRTCSize();
 void mbcRTCInit();
 void mbcRTCLoad(FILE *f);
